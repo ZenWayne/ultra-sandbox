@@ -75,13 +75,21 @@ func encodeExit(code int) []byte {
 	return b
 }
 
-// --- Socket path ---
+// --- Sandbox dir (one env var controls socket + shim bin dir) ---
+
+func sandboxDir() string {
+	if d := os.Getenv("SANDBOX_DIR"); d != "" {
+		return d
+	}
+	return ".ultra_sandbox"
+}
 
 func socketPath() string {
-	if s := os.Getenv("SANDBOX_SOCKET"); s != "" {
-		return s
-	}
-	return ".ultra_sandbox/daemon.sock"
+	return filepath.Join(sandboxDir(), "daemon.sock")
+}
+
+func shimBinDir() string {
+	return filepath.Join(sandboxDir(), "bin")
 }
 
 // --- Daemon ---
@@ -434,7 +442,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   sandbox daemon [--socket PATH]     start host daemon
   sandbox run <cmd> [args...]        run command via daemon
-  sandbox map <cmd> [--remove]       create/remove shim (SANDBOX_SHIM_DIR or ./.ultra_sandbox/)`)
+  sandbox map <cmd> [--remove]       create/remove shim in $SANDBOX_DIR/bin/ (default .ultra_sandbox/bin/)`)
 	os.Exit(1)
 }
 
@@ -467,15 +475,9 @@ func main() {
 		}
 		cmdName := os.Args[2]
 		remove := len(os.Args) > 3 && os.Args[3] == "--remove"
-
-		// shim dir: $SANDBOX_SHIM_DIR, or .ultra_sandbox/ in cwd
-		shimDir := os.Getenv("SANDBOX_SHIM_DIR")
-		if shimDir == "" {
-			cwd, _ := os.Getwd()
-			shimDir = filepath.Join(cwd, ".ultra_sandbox")
-		}
-		os.MkdirAll(shimDir, 0755)
-		runMap(shimDir, cmdName, remove)
+		binDir := shimBinDir()
+		os.MkdirAll(binDir, 0755)
+		runMap(binDir, cmdName, remove)
 
 	default:
 		// Allow argv[0] as command name (symlink invocation)

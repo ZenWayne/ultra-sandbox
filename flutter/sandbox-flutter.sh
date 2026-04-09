@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ULTRA_SANDBOX_DIR="$SCRIPT_DIR/../ultra-sandbox/.ultra_sandbox"
+export SANDBOX_DIR="$SCRIPT_DIR/../ultra-sandbox/.ultra_sandbox"
 IMAGE="localhost/claude_code_flutter:latest"
 
 replace_proxy() {
@@ -20,19 +20,17 @@ if ! command -v sandbox &>/dev/null; then
 fi
 
 # --- Ensure daemon is running ------------------------------------------------
-mkdir -p "$ULTRA_SANDBOX_DIR"
-SANDBOX_SOCKET="$ULTRA_SANDBOX_DIR/daemon.sock"
-if [ ! -S "$SANDBOX_SOCKET" ]; then
+mkdir -p "$SANDBOX_DIR/bin"
+if [ ! -S "$SANDBOX_DIR/daemon.sock" ]; then
     echo "Starting sandbox daemon..."
-    SANDBOX_SOCKET="$SANDBOX_SOCKET" sandbox daemon &
+    sandbox daemon &
     sleep 0.3
 fi
 
 # --- Map host commands -------------------------------------------------------
-# Run from the parent of .ultra_sandbox/ so shims land there by default
-(cd "$(dirname "$ULTRA_SANDBOX_DIR")" && SANDBOX_SOCKET="$SANDBOX_SOCKET" sandbox map flutter)
-(cd "$(dirname "$ULTRA_SANDBOX_DIR")" && SANDBOX_SOCKET="$SANDBOX_SOCKET" sandbox map adb)
-(cd "$(dirname "$ULTRA_SANDBOX_DIR")" && SANDBOX_SOCKET="$SANDBOX_SOCKET" sandbox map podman)
+sandbox map flutter
+sandbox map adb
+sandbox map podman
 
 echo "=== sandbox mapped: flutter, adb, podman ==="
 
@@ -66,12 +64,12 @@ podman run -it --rm \
     -v "/tmp":"/tmp" \
     -v "flutter_build_${WORK_DIR_ESCAPED}:$WORK_DIR/build" \
     -v "flutter_dart_tool_${WORK_DIR_ESCAPED}:$WORK_DIR/.dart_tool" \
-    -v "$ULTRA_SANDBOX_DIR":"/ultra_sandbox" \
+    -v "$SANDBOX_DIR":"/ultra_sandbox" \
     -v "$HOME/.local/bin/sandbox":"/usr/local/bin/sandbox:ro" \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
     -e DISABLE_AUTOUPDATER=1 \
-    -e SANDBOX_SOCKET="/ultra_sandbox/daemon.sock" \
+    -e SANDBOX_DIR="/ultra_sandbox" \
     -e LANG="$LANG" \
     -e LC_ALL="$LC_ALL" \
     -e FLUTTER_STORAGE_BASE_URL="https://storage.flutter-io.cn" \
@@ -84,7 +82,7 @@ podman run -it --rm \
     -e no_proxy="$no_proxy" \
     -e TERM=xterm-256color \
     -e HOME="/home/$USER" \
-    -e PATH="/ultra_sandbox:/opt/flutter/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin:/usr/local/bin:/usr/bin:/bin" \
+    -e PATH="/ultra_sandbox/bin:/opt/flutter/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin:/usr/local/bin:/usr/bin:/bin" \
     -w "$WORK_DIR" \
     "$IMAGE" \
     claude --dangerously-skip-permissions "$@"
