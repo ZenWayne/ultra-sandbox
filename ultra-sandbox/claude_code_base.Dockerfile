@@ -79,7 +79,7 @@ USER ${HOST_USER_NAME}
 
 # Install Claude Code using local installer
 COPY --chown=${HOST_USER_NAME}:${HOST_USER_GID} install.sh /tmp/install.sh
-RUN bash /tmp/install.sh && rm /tmp/install.sh
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Set working directory
 WORKDIR /workspace
