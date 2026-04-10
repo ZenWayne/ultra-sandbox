@@ -4,14 +4,22 @@
 # Usage: ultra-sandbox.sh [command]
 # If no command provided, starts an interactive bash shell
 
+set -e
+
 replace_proxy() {
     local proxy="$1"
     echo "${proxy//127.0.0.1:10809/host.docker.internal:10809}"
 }
 
 WORK_DIR=$(pwd)
-SANDBOX_DIR="$(dirname "$(realpath "$0")")/.ultra_sandbox"
+SANDBOX_DIR="$WORK_DIR/.ultra_sandbox"
 mkdir -p "$SANDBOX_DIR/bin"
+
+# Cleanup function - remove mapped bins on exit
+cleanup() {
+    rm -rf "$SANDBOX_DIR"
+}
+trap cleanup EXIT
 
 echo "Current directory mounted to: $WORK_DIR"
 
@@ -23,7 +31,6 @@ podman run -it --rm \
     -v "$SANDBOX_DIR":"/ultra_sandbox" \
     -v "$HOME/.local/bin/sandbox":"/usr/local/bin/sandbox:ro" \
     -e LANG="$LANG" \
-    -e LC_ALL="$LC_ALL" \
     -e http_proxy="$(replace_proxy "$http_proxy")" \
     -e https_proxy="$(replace_proxy "$https_proxy")" \
     -e HTTP_PROXY="$(replace_proxy "$HTTP_PROXY")" \

@@ -4,8 +4,14 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export SANDBOX_DIR="$SCRIPT_DIR/../ultra-sandbox/.ultra_sandbox"
+WORK_DIR=$(pwd)
+export SANDBOX_DIR="$WORK_DIR/.ultra_sandbox"
+
+# Cleanup function - remove sandbox dir on exit
+cleanup() {
+    rm -rf "$SANDBOX_DIR"
+}
+trap cleanup EXIT
 
 replace_proxy() {
     local proxy="$1"
@@ -32,7 +38,6 @@ sandbox map podman
 echo "=== sandbox mapped: podman ==="
 
 # --- Launch container --------------------------------------------------------
-WORK_DIR=$(pwd)
 VOLUME_NAME="claude-yolo-$(echo "$WORK_DIR" | sed 's/[^a-zA-Z0-9]/_/g' | tr '[:upper:]' '[:lower:]')"
 VOLUME_ARGS=(-v "$WORK_DIR:$WORK_DIR")
 
@@ -55,7 +60,6 @@ podman run -it --rm \
     -e DISABLE_AUTOUPDATER=1 \
     -e SANDBOX_DIR="/ultra_sandbox" \
     -e LANG="$LANG" \
-    -e LC_ALL="$LC_ALL" \
     -e http_proxy="$(replace_proxy "$http_proxy")" \
     -e https_proxy="$(replace_proxy "$https_proxy")" \
     -e HTTP_PROXY="$(replace_proxy "$HTTP_PROXY")" \

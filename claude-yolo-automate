@@ -12,7 +12,14 @@ replace_proxy() {
     echo "${proxy//127.0.0.1:10809/host.docker.internal:10809}"
 }
 
-export SANDBOX_DIR="${SANDBOX_DIR:-$HOME/.ultra_sandbox}"
+WORK_DIR=$(pwd)
+export SANDBOX_DIR="${SANDBOX_DIR:-$WORK_DIR/.ultra_sandbox}"
+
+# Cleanup function - remove sandbox dir on exit
+cleanup() {
+    rm -rf "$SANDBOX_DIR"
+}
+trap cleanup EXIT
 
 # --- Sandbox setup (only if SANDBOX_MAP_PROCESSES is set) -------------------
 if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
@@ -69,12 +76,10 @@ podman run -it --rm \
     "${SANDBOX_VOLUME_ARGS[@]}" \
     -v "$HOME/.claude":"/home/$USER/.claude" \
     -v "$HOME/.claude.json":"/home/$USER/.claude.json" \
-    -v "$HOME/.ssh":"/home/$USER/.ssh:ro" \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
     -e DISABLE_AUTOUPDATER=1 \
     -e LANG="$LANG" \
-    -e LC_ALL="$LC_ALL" \
     -e http_proxy="$(replace_proxy "$http_proxy")" \
     -e https_proxy="$(replace_proxy "$https_proxy")" \
     -e HTTP_PROXY="$(replace_proxy "$HTTP_PROXY")" \

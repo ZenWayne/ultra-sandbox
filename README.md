@@ -5,6 +5,8 @@
 Ultra-sandbox is a lightweight command-proxy system: a tiny daemon on the host, a frame protocol over a Unix socket, and a drop-in shim that makes container-side commands execute on the host without Docker-in-Docker, SSH tunnels, or privileged containers.
 
 ---
+## DEMO
+<img src="demo.gif" width="100%" />
 
 ## Architecture
 

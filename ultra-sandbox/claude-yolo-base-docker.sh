@@ -25,7 +25,6 @@ podman run -it --rm \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
     -e DISABLE_AUTOUPDATER=1 \
     -e LANG="$LANG" \
-    -e LC_ALL="$LC_ALL" \
     -e http_proxy="$(replace_proxy "$http_proxy")" \
     -e https_proxy="$(replace_proxy "$https_proxy")" \
     -e HTTP_PROXY="$(replace_proxy "$HTTP_PROXY")" \

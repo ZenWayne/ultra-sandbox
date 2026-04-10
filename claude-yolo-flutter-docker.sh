@@ -4,9 +4,15 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export SANDBOX_DIR="$SCRIPT_DIR/../ultra-sandbox/.ultra_sandbox"
+WORK_DIR=$(pwd)
+export SANDBOX_DIR="$WORK_DIR/.ultra_sandbox"
 IMAGE="localhost/claude_code_flutter:latest"
+
+# Cleanup function - remove sandbox dir on exit
+cleanup() {
+    rm -rf "$SANDBOX_DIR"
+}
+trap cleanup EXIT
 
 replace_proxy() {
     local proxy="$1"
@@ -35,6 +41,7 @@ sandbox map podman
 echo "=== sandbox mapped: flutter, adb, podman ==="
 
 # --- Auto-build image if missing ---------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! podman image exists "$IMAGE" 2>/dev/null; then
     echo "=== Image '$IMAGE' not found, building... ==="
     podman build \
@@ -49,7 +56,6 @@ if ! podman image exists "$IMAGE" 2>/dev/null; then
 fi
 
 # --- Launch container --------------------------------------------------------
-WORK_DIR=$(pwd)
 WORK_DIR_ESCAPED="${WORK_DIR//\//_}"
 
 podman run -it --rm \
@@ -71,7 +77,6 @@ podman run -it --rm \
     -e DISABLE_AUTOUPDATER=1 \
     -e SANDBOX_DIR="/ultra_sandbox" \
     -e LANG="$LANG" \
-    -e LC_ALL="$LC_ALL" \
     -e FLUTTER_STORAGE_BASE_URL="https://storage.flutter-io.cn" \
     -e PUB_HOSTED_URL="https://pub.flutter-io.cn" \
     -e http_proxy="$(replace_proxy "$http_proxy")" \

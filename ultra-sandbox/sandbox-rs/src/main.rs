@@ -636,6 +636,12 @@ fn run_map(bin_dir: &Path, cmd_name: &str, remove: bool) {
         return;
     }
 
+    // Skip if shim already exists
+    if shim_path.exists() {
+        println!("mapped (already exists): {} -> sandbox run {}", shim_path.display(), cmd_name);
+        return;
+    }
+
     let (_, content) = shim_filename_and_content(cmd_name);
     if let Err(e) = fs::write(&shim_path, content.as_bytes()) {
         eprintln!("sandbox map: write {}: {}", shim_path.display(), e);
