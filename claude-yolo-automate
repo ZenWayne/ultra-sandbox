@@ -35,6 +35,8 @@ if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
     fi
 
     mkdir -p "$SANDBOX_DIR/bin"
+    # Shims are symlinks to $SANDBOX_DIR/bin/sandbox, so the binary must live here.
+    cp -u "$(command -v sandbox)" "$SANDBOX_DIR/bin/sandbox"
 
     if [ ! -S "$SANDBOX_DIR/daemon.sock" ]; then
         echo "Starting sandbox daemon..."

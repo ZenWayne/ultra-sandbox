@@ -209,6 +209,39 @@ The script will:
 
 ---
 
+## Pattern: proxying MCP stdio servers whose paths rotate
+
+Some apps ship as AppImages that mount themselves at a randomised path every launch — e.g. [Pencil](https://getpencil.dev/) appears at `/tmp/.mount_Pencil<random>/` and its bundled MCP server lives at `/tmp/.mount_Pencil<random>/resources/app.asar.unpacked/out/mcp-server-linux-x64`. Hardcoding that path into `~/.claude.json` means re-editing it after every restart, and inside a container the FUSE mount isn't even reachable (podman+crun under `--userns=keep-id` can't bind-mount FUSE sources).
+
+The repo ships a tiny dynamic-resolver wrapper, `update-pencil-mcp`, that at exec time scans `/tmp/.mount_Pencil*/resources/app.asar.unpacked/out/mcp-server-linux-x64` and execs the newest match. Point Claude Code at the stable command name and let the wrapper follow the live mount.
+
+### Setup
+
+1. **Install the wrapper on the host.**
+   ```bash
+   install -m 755 update-pencil-mcp ~/.local/bin/update-pencil-mcp
+   ```
+
+2. **Edit `~/.claude.json`** — change the Pencil MCP entry from the absolute FUSE path to the stable command name:
+   ```json
+   "pencil": {
+     "type": "stdio",
+     "command": "update-pencil-mcp",
+     "args": ["--app", "desktop"]
+   }
+   ```
+
+3. **Proxy it into the container** — add `update-pencil-mcp` to `SANDBOX_MAP_PROCESSES`:
+   ```bash
+   SANDBOX_MAP_PROCESSES="update-pencil-mcp podman" ./claude-yolo-automate
+   ```
+
+Inside the container, Claude execs `update-pencil-mcp` → shim → host daemon → host wrapper → current MCP binary. stdio is forwarded end-to-end through the frame protocol, so the MCP handshake completes normally **without any bind-mount of `/tmp/.mount_Pencil*`**.
+
+The same pattern generalises to any stdio MCP (or plain CLI) whose binary lives at a path that rotates between runs: drop a small resolver into `~/.local/bin/`, point the config at the stable name, add it to `SANDBOX_MAP_PROCESSES`.
+
+---
+
 ## The `sandbox` binary
 
 ```
@@ -234,6 +267,7 @@ ultra-sandbox/                          # repo root
 ├── claude-yolo-automate                # generic launcher (env-driven mapping)
 ├── claude-yolo-py-docker.sh            # Python project launcher
 ├── claude-yolo-flutter-docker.sh       # Flutter project launcher
+├── update-pencil-mcp                   # dynamic resolver for Pencil's rotating MCP path
 │
 └── ultra-sandbox/
     ├── README.md                       # deeper protocol docs
@@ -287,6 +321,9 @@ If you use a local HTTP proxy on `127.0.0.1:10809`, the launchers automatically 
 
 **Claude session not persisted**
 Make sure `~/.claude` and `~/.claude.json` exist on the host before launching. The mounts are r/w, so anything Claude writes there survives container restarts.
+
+**Pencil MCP fails with "no such file" or `WebSocket not connected`**
+Pencil's MCP binary lives under `/tmp/.mount_Pencil<random>/`, and the random suffix rotates every launch. Use the bundled `update-pencil-mcp` wrapper and add it to `SANDBOX_MAP_PROCESSES` — see *Pattern: proxying MCP stdio servers whose paths rotate* above.
 
 ---
 

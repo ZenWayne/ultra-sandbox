@@ -1,0 +1,33 @@
+#!/bin/bash
+# Dynamic resolver wrapper for Pencil's MCP stdio server.
+#
+# Pencil (AppImage) mounts itself at /tmp/.mount_Pencil<random>/ on every
+# launch, so any config that hardcodes the absolute MCP path goes stale after
+# a restart. Instead of patching configs each time, point configs at this
+# stable command name and let it resolve the current mount at exec time.
+#
+# Claude Code config (~/.claude.json) should use:
+#   "command": "update-pencil-mcp", "args": ["--app", "desktop"]
+#
+# Inside the ultra-sandbox container, add `update-pencil-mcp` to
+# SANDBOX_MAP_PROCESSES so the in-container call is proxied to the host.
+
+set -e
+
+subpath="resources/app.asar.unpacked/out/mcp-server-linux-x64"
+
+latest=""
+for d in /tmp/.mount_Pencil*; do
+    candidate="$d/$subpath"
+    [ -x "$candidate" ] || continue
+    if [ -z "$latest" ] || [ "$candidate" -nt "$latest" ]; then
+        latest="$candidate"
+    fi
+done
+
+if [ -z "$latest" ]; then
+    echo "update-pencil-mcp: no /tmp/.mount_Pencil*/$subpath found — is Pencil running?" >&2
+    exit 1
+fi
+
+exec "$latest" "$@"
