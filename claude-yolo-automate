@@ -81,6 +81,7 @@ podman run -it --rm \
     --network=host \
     "${VOLUME_ARGS[@]}" \
     "${SANDBOX_VOLUME_ARGS[@]}" \
+    -v "$HOME/.ssh":"/home/$USER/.ssh:ro" \
     -v "$HOME/.claude":"/home/$USER/.claude" \
     -v "$HOME/.claude.json":"/home/$USER/.claude.json" \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
