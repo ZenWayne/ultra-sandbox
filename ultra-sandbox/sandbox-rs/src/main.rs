@@ -117,7 +117,13 @@ fn socket_path() -> PathBuf {
 }
 
 fn shim_bin_dir() -> PathBuf {
-    sandbox_dir().join("bin")
+    env::var_os("SANDBOX_BIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".local").join("bin"))
+                .unwrap_or_else(|| sandbox_dir().join("bin"))
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -660,8 +666,8 @@ fn usage() -> ! {
     eprintln!("  sandbox daemon [--socket PATH]     start host daemon");
     eprintln!("  sandbox run <cmd> [args...]        run command via daemon");
     eprintln!(
-        "  sandbox map <cmd> [--remove]       create/remove shim in $SANDBOX_DIR/bin/ \
-         (default .ultra_sandbox/bin/)"
+        "  sandbox map <cmd> [--remove]       create/remove shim in $SANDBOX_BIN_DIR \
+         (default ~/.local/bin/)"
     );
     process::exit(1);
 }
