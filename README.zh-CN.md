@@ -74,35 +74,38 @@ Ultra-sandbox 是一套轻量的命令代理系统：宿主机上运行一个微
 
 ### 1. 运行安装脚本
 
-克隆仓库后执行对应平台的安装脚本——它会一键完成所有事情:拉取 `sandbox` release、构建 `claude_code_base` 镜像、把 `claude-yolo-automate` 放到 `$PATH`。
+一行命令,不用 clone 仓库。安装脚本会拉取 `sandbox` release、下载 Dockerfile 构建 `claude_code_base` 镜像、把 `claude-yolo-automate` 放到 `$PATH`。
 
 **Linux / macOS / WSL2:**
 ```bash
-git clone https://github.com/ZenWayne/ultra-sandbox.git
-cd ultra-sandbox
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.sh | bash
 ```
 
 **Windows(原生,PowerShell):**
 ```powershell
-git clone https://github.com/ZenWayne/ultra-sandbox.git
-cd ultra-sandbox
-.\install.ps1
+irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.ps1 | iex
 ```
 
 > `claude-yolo-automate` 是 bash 脚本。在原生 Windows 上要通过 Git Bash、MSYS2 或 WSL2 运行——或者直接在 WSL2 里用 `install.sh` 获得纯 bash 流程。
 
-**环境变量(两个安装脚本通用):**
+**环境变量(两个安装脚本通用):** 在 `curl | bash` / `irm | iex` 前面设置。
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
 | `INSTALL_DIR` | `~/.local/bin` / `%USERPROFILE%\.local\bin` | `sandbox` 和 launcher 的安装位置 |
 | `REPO` | `ZenWayne/ultra-sandbox` | GitHub 仓库 |
-| `RELEASE_TAG` | `latest` | Release 标签 |
-| `IMAGE_TAG` | `claude_code_base` | Docker 镜像名 |
+| `BRANCH` | `main` | 拉取 raw 文件(Dockerfile、launcher)的 git ref(分支/tag/sha) |
+| `RELEASE_TAG` | `latest` | sandbox 二进制的 release 标签 |
+| `IMAGE_TAG` | `claude_code_base` | 构建出的镜像名 |
 | `SKIP_SANDBOX` | — | `=1` 跳过二进制下载 |
 | `SKIP_IMAGE` | — | `=1` 跳过镜像构建 |
 | `SKIP_LAUNCHER` | — | `=1` 跳过 launcher 安装 |
+
+示例——锁定到某个 tag,换自定义安装目录:
+```bash
+INSTALL_DIR=~/bin BRANCH=v1.0.0 RELEASE_TAG=v1.0.0 \
+  curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/v1.0.0/install.sh | bash
+```
 
 **从源码构建**(Intel Mac、其他架构,或不想用预编译版本):
 

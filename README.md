@@ -74,35 +74,38 @@ Ultra-sandbox is a lightweight command-proxy system: a tiny daemon on the host, 
 
 ### 1. Run the installer
 
-Clone the repo and run the platform-appropriate installer — it does everything in one step: downloads the `sandbox` release, builds the `claude_code_base` image, and drops `claude-yolo-automate` onto `$PATH`.
+One-liner — no clone needed. The installer fetches the `sandbox` release, downloads the Dockerfile to build the `claude_code_base` image, and drops `claude-yolo-automate` onto `$PATH`.
 
 **Linux / macOS / WSL2:**
 ```bash
-git clone https://github.com/ZenWayne/ultra-sandbox.git
-cd ultra-sandbox
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.sh | bash
 ```
 
 **Windows (native, PowerShell):**
 ```powershell
-git clone https://github.com/ZenWayne/ultra-sandbox.git
-cd ultra-sandbox
-.\install.ps1
+irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.ps1 | iex
 ```
 
 > `claude-yolo-automate` is a bash script. On native Windows, run it from Git Bash, MSYS2, or WSL2 — or just use `install.sh` inside WSL2 for a fully-bash flow.
 
-**Env overrides (both installers):**
+**Env overrides (both installers):** set them before the `curl | bash` / `irm | iex`.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `INSTALL_DIR` | `~/.local/bin` / `%USERPROFILE%\.local\bin` | Where to drop `sandbox` + launcher |
-| `REPO` | `ZenWayne/ultra-sandbox` | GitHub repo to pull release from |
-| `RELEASE_TAG` | `latest` | Release tag |
-| `IMAGE_TAG` | `claude_code_base` | Docker image tag |
+| `REPO` | `ZenWayne/ultra-sandbox` | GitHub repo to pull from |
+| `BRANCH` | `main` | Git ref (branch/tag/sha) for raw files (Dockerfile, launcher) |
+| `RELEASE_TAG` | `latest` | Release tag for the sandbox binary |
+| `IMAGE_TAG` | `claude_code_base` | Built image name |
 | `SKIP_SANDBOX` | — | `=1` to skip binary download |
 | `SKIP_IMAGE` | — | `=1` to skip image build |
 | `SKIP_LAUNCHER` | — | `=1` to skip launcher install |
+
+Example — pin to a specific tag and use a custom install dir:
+```bash
+INSTALL_DIR=~/bin BRANCH=v1.0.0 RELEASE_TAG=v1.0.0 \
+  curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/v1.0.0/install.sh | bash
+```
 
 **Build from source** (Intel Mac, other arches, or if you'd rather not use a prebuilt release):
 

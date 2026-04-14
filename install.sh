@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # Ultra-sandbox installer.
 #
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.sh | bash
+# Or from a clone:
+#   ./install.sh
+#
 # 1. Downloads the `sandbox` binary from the latest GitHub release.
-# 2. Builds the `claude_code_base` docker image.
-# 3. Installs `claude-yolo-automate` onto $PATH.
+# 2. Downloads the Dockerfile and builds the `claude_code_base` image.
+# 3. Downloads `claude-yolo-automate` onto $PATH.
 #
 # Env overrides:
 #   INSTALL_DIR       Install destination (default: $HOME/.local/bin)
 #   REPO              GitHub repo (default: ZenWayne/ultra-sandbox)
-#   RELEASE_TAG       Release tag to pull (default: latest)
-#   IMAGE_TAG         Image name (default: claude_code_base)
+#   BRANCH            Git ref for raw files — branch/tag/sha (default: main)
+#   RELEASE_TAG       Sandbox-binary release tag (default: latest)
+#   IMAGE_TAG         Built image name (default: claude_code_base)
 #   SKIP_SANDBOX      =1 to skip sandbox binary download
 #   SKIP_IMAGE        =1 to skip image build
 #   SKIP_LAUNCHER     =1 to skip launcher install
@@ -17,15 +23,30 @@
 set -euo pipefail
 
 REPO="${REPO:-ZenWayne/ultra-sandbox}"
+BRANCH="${BRANCH:-main}"
 RELEASE_TAG="${RELEASE_TAG:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 IMAGE_TAG="${IMAGE_TAG:-claude_code_base}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RAW_BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[1;31m[err]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# fetch URL DEST  — download URL to DEST atomically (via temp file + mv), so
+# even a binary that's currently executing can be replaced (ETXTBSY-safe).
+fetch() {
+    local url="$1" dest="$2" tmp="$2.new.$$"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 -o "$tmp" "$url" || { rm -f "$tmp"; err "download failed: $url"; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$tmp" "$url" || { rm -f "$tmp"; err "download failed: $url"; }
+    else
+        err "need curl or wget to download files"
+    fi
+    mv -f "$tmp" "$dest"
+}
 
 detect_asset() {
     local os arch
@@ -77,28 +98,17 @@ install_sandbox() {
     case "$asset" in *.exe) dest="$dest.exe" ;; esac
 
     log "Downloading $asset from $url"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 3 -o "$dest" "$url"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -O "$dest" "$url"
-    else
-        err "need curl or wget to download release"
-    fi
+    fetch "$url" "$dest"
     chmod +x "$dest"
     log "Installed sandbox -> $dest"
 }
 
 build_image() {
-    local dockerfile_dir="$SCRIPT_DIR/ultra-sandbox"
-    local dockerfile="$dockerfile_dir/claude_code_base.Dockerfile"
-    [ -f "$dockerfile" ] || err "Dockerfile not found at $dockerfile"
-
     local engine=""
     if command -v podman >/dev/null 2>&1; then
         engine="podman"
     elif command -v docker >/dev/null 2>&1; then
         engine="docker"
-        warn "podman not found, falling back to docker (launcher script still expects podman at runtime)"
     else
         err "need podman (or docker) to build the image"
     fi
@@ -108,9 +118,16 @@ build_image() {
         err "HOST_USER_NAME must not be 'root' — run installer as a non-root user"
     fi
 
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' RETURN
+
+    log "Fetching Dockerfile"
+    fetch "$RAW_BASE/ultra-sandbox/claude_code_base.Dockerfile" "$tmpdir/claude_code_base.Dockerfile"
+
     log "Building image $IMAGE_TAG with $engine"
     (
-        cd "$dockerfile_dir"
+        cd "$tmpdir"
         "$engine" build \
             -f claude_code_base.Dockerfile \
             --build-arg HOST_USER_UID="$(id -u)" \
@@ -125,12 +142,10 @@ build_image() {
 }
 
 install_launcher() {
-    local src="$SCRIPT_DIR/claude-yolo-automate"
     local dest="$INSTALL_DIR/claude-yolo-automate"
-    [ -f "$src" ] || err "launcher not found at $src"
-
-    log "Installing launcher -> $dest"
-    install -m 755 "$src" "$dest"
+    log "Fetching claude-yolo-automate -> $dest"
+    fetch "$RAW_BASE/claude-yolo-automate" "$dest"
+    chmod +x "$dest"
 }
 
 main() {
