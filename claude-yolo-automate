@@ -86,6 +86,7 @@ podman run -it --rm \
     -v "$HOME/.ssh":"/home/$USER/.ssh:ro" \
     -v "$HOME/.claude":"/home/$USER/.claude" \
     -v "$HOME/.claude.json":"/home/$USER/.claude.json" \
+    $([ -d "$HOME/Pictures/screenshot" ] && echo "-v $HOME/Pictures/screenshot:/home/$USER/Pictures/screenshot") \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
     -e DISABLE_AUTOUPDATER=1 \
