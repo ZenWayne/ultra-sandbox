@@ -14,8 +14,22 @@ VOLUME_ARGS=(-v "$WORK_DIR:$WORK_DIR")
 
 echo "Current directory mounted to: $WORK_DIR"
 
-podman run -it --rm \
-    --userns=keep-id \
+# Detect container engine (podman --userns=keep-id vs docker --user).
+if command -v podman &>/dev/null; then
+    ENGINE=podman
+    USER_ARGS=(--userns=keep-id)
+    IMAGE=localhost/claude_code_base:latest
+elif command -v docker &>/dev/null; then
+    ENGINE=docker
+    USER_ARGS=(--user "$(id -u):$(id -g)")
+    IMAGE=claude_code_base:latest
+else
+    echo "Error: need 'podman' or 'docker' on PATH" >&2
+    exit 1
+fi
+
+"$ENGINE" run -it --rm \
+    "${USER_ARGS[@]}" \
     --network=host \
     "${VOLUME_ARGS[@]}" \
     -v "$HOME/.claude":"/home/$USER/.claude" \
@@ -35,5 +49,5 @@ podman run -it --rm \
     -e HOME="/home/$USER" \
     -w "$WORK_DIR" \
     --entrypoint /home/$USER/.local/bin/claude \
-    localhost/claude_code_base:latest \
+    "$IMAGE" \
     --dangerously-skip-permissions "$@"
