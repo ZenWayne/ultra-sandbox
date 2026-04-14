@@ -1,6 +1,6 @@
 # Ultra-sandbox
 
-> Run Claude Code (or any CLI tool) with `--dangerously-skip-permissions` inside a container, while still using `podman`, `flutter`, `adb`, and other tools **from the host** — transparently.
+> Run Claude Code (or any CLI tool) with `--dangerously-skip-permissions` inside a container, while still using `docker`, `flutter`, `adb`, and other tools **from the host** — transparently.
 
 **Language**: English | [简体中文](README.zh-CN.md)
 
@@ -15,7 +15,7 @@ Ultra-sandbox is a lightweight command-proxy system: a tiny daemon on the host, 
 ```
 ┌────────────────────────────── HOST ──────────────────────────────┐
 │                                                                    │
-│    real podman / flutter / adb / …                                 │
+│    real docker / flutter / adb / …                                 │
 │               ▲                                                    │
 │               │ fork + exec                                        │
 │               │                                                    │
@@ -31,7 +31,7 @@ Ultra-sandbox is a lightweight command-proxy system: a tiny daemon on the host, 
 │     .ultra_sandbox/                                                │
 │       ├─ daemon.sock        ◄─── bind-mounted into container       │
 │       └─ bin/                                                      │
-│          ├─ podman   ─► #!/bin/sh exec sandbox run podman "$@"     │
+│          ├─ docker   ─► #!/bin/sh exec sandbox run docker "$@"     │
 │          ├─ flutter  ─► #!/bin/sh exec sandbox run flutter "$@"    │
 │          └─ adb      ─► #!/bin/sh exec sandbox run adb "$@"        │
 │                                                                    │
@@ -45,11 +45,11 @@ Ultra-sandbox is a lightweight command-proxy system: a tiny daemon on the host, 
 │                                                                   │
 │   Claude Code (--dangerously-skip-permissions)                    │
 │        │                                                          │
-│        │ calls `podman build .`                                   │
+│        │ calls `docker build .`                                   │
 │        ▼                                                          │
-│   /ultra_sandbox/bin/podman   (shim)                              │
+│   /ultra_sandbox/bin/docker   (shim)                              │
 │        │                                                          │
-│        │ execs  sandbox run podman build .                        │
+│        │ execs  sandbox run docker build .                        │
 │        ▼                                                          │
 │   /usr/local/bin/sandbox  (client)                                │
 │        │                                                          │
@@ -61,7 +61,7 @@ Ultra-sandbox is a lightweight command-proxy system: a tiny daemon on the host, 
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-**Key idea.** The container never runs `podman` itself. It runs a 3-line shell shim that hands the command to the `sandbox` client, which forwards it to the host daemon over a Unix socket. stdin/stdout/stderr/TTY-resize/signals are all multiplexed on the same socket via a 3-byte framed protocol, so `podman run -it alpine sh` inside the container gives you a real interactive shell on the host.
+**Key idea.** The container never runs `docker` itself. It runs a 3-line shell shim that hands the command to the `sandbox` client, which forwards it to the host daemon over a Unix socket. stdin/stdout/stderr/TTY-resize/signals are all multiplexed on the same socket via a 3-byte framed protocol, so `docker run -it alpine sh` inside the container gives you a real interactive shell on the host.
 
 ---
 
@@ -69,8 +69,7 @@ Ultra-sandbox is a lightweight command-proxy system: a tiny daemon on the host, 
 
 ### Prerequisites
 
-- **`podman`** on the host. macOS/Windows users must also run `podman machine init && podman machine start` first (containers run inside a Linux VM — `--network=host` targets the VM, not your host OS).
-- On macOS: `brew install podman`. On Windows: install [Podman Desktop](https://podman-desktop.io/).
+- **Docker** on the host. macOS/Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (it manages the Linux VM for you — `--network=host` targets that VM). Linux: install `docker` from your distro.
 - `~/.local/bin` (Linux/macOS) or `%USERPROFILE%\.local\bin` (Windows) on your `PATH`.
 
 ### 1. Run the installer
@@ -100,7 +99,7 @@ cd ultra-sandbox
 | `INSTALL_DIR` | `~/.local/bin` / `%USERPROFILE%\.local\bin` | Where to drop `sandbox` + launcher |
 | `REPO` | `ZenWayne/ultra-sandbox` | GitHub repo to pull release from |
 | `RELEASE_TAG` | `latest` | Release tag |
-| `IMAGE_TAG` | `claude_code_base` | Podman image tag |
+| `IMAGE_TAG` | `claude_code_base` | Docker image tag |
 | `SKIP_SANDBOX` | — | `=1` to skip binary download |
 | `SKIP_IMAGE` | — | `=1` to skip image build |
 | `SKIP_LAUNCHER` | — | `=1` to skip launcher install |
@@ -131,12 +130,12 @@ That's it. Inside the container:
 > Can you build the Docker image in this repo?
 
 # Claude runs:
-podman build -t myapp .         # ← actually runs on your host
+docker build -t myapp .         # ← actually runs on your host
 ```
 
 - The daemon is auto-started the first time a launcher runs.
 - `.ultra_sandbox/daemon.sock` lives under `$HOME/.ultra_sandbox/` by default (override with `SANDBOX_DIR`).
-- To proxy more commands, extend the env var: `SANDBOX_MAP_PROCESSES="podman adb flutter"`.
+- To proxy more commands, extend the env var: `SANDBOX_MAP_PROCESSES="docker adb flutter"`.
 
 ---
 
@@ -144,7 +143,7 @@ podman build -t myapp .         # ← actually runs on your host
 
 | Problem | Traditional fix | Ultra-sandbox fix |
 |---|---|---|
-| Need `podman build` inside container | Docker-in-Docker, privileged container | `sandbox map podman` → transparent proxy |
+| Need `docker build` inside container | Docker-in-Docker, privileged container | `sandbox map docker` → transparent proxy |
 | Need host ADB server for physical device | Mount `/dev/bus/usb`, `--privileged` | `sandbox map adb`, `--network=host` |
 | Flutter build pollutes host `build/` dir | Manually clean up | Named volume overlay on `build/` + `.dart_tool/` |
 | Claude Code needs session persistence | Re-login every run | `~/.claude` + `~/.claude.json` mounted r/w |
@@ -166,7 +165,7 @@ The repo ships two launchers:
 Both share the same design:
 
 - `--userns=keep-id` — container UID/GID = host UID/GID
-- `--network=host` — reuse host proxies, ADB server, podman daemon
+- `--network=host` — reuse host proxies, ADB server, docker daemon
 - Mount `$WORK_DIR:$WORK_DIR` at the **same path** (Claude sees the project at the same absolute path inside and outside)
 - Mount `~/.claude`, `~/.claude.json` r/w — session + auth persistence
 - Mount `~/.ssh` **read-only** — git over SSH works, Claude can't exfiltrate keys
@@ -175,19 +174,19 @@ Both share the same design:
 ### Example: generic launcher with custom command set
 
 ```bash
-SANDBOX_MAP_PROCESSES="podman adb kubectl" ./claude-yolo-automate
+SANDBOX_MAP_PROCESSES="docker adb kubectl" ./claude-yolo-automate
 ```
 
 The script will:
 1. Auto-start the sandbox daemon if not running.
-2. Create shims at `$SANDBOX_DIR/bin/{podman,adb,kubectl}`.
+2. Create shims at `$SANDBOX_DIR/bin/{docker,adb,kubectl}`.
 3. Launch `claude_code_base` with `.ultra_sandbox/` mounted and `PATH` set.
 
 ---
 
 ## Pattern: proxying MCP stdio servers whose paths rotate
 
-Some apps ship as AppImages that mount themselves at a randomised path every launch — e.g. [Pencil](https://getpencil.dev/) appears at `/tmp/.mount_Pencil<random>/` and its bundled MCP server lives at `/tmp/.mount_Pencil<random>/resources/app.asar.unpacked/out/mcp-server-linux-x64`. Hardcoding that path into `~/.claude.json` means re-editing it after every restart, and inside a container the FUSE mount isn't even reachable (podman+crun under `--userns=keep-id` can't bind-mount FUSE sources).
+Some apps ship as AppImages that mount themselves at a randomised path every launch — e.g. [Pencil](https://getpencil.dev/) appears at `/tmp/.mount_Pencil<random>/` and its bundled MCP server lives at `/tmp/.mount_Pencil<random>/resources/app.asar.unpacked/out/mcp-server-linux-x64`. Hardcoding that path into `~/.claude.json` means re-editing it after every restart, and inside a container the FUSE mount isn't even reachable (rootless container runtimes can't bind-mount FUSE sources).
 
 The repo ships a tiny dynamic-resolver wrapper, `update-pencil-mcp`, that at exec time scans `/tmp/.mount_Pencil*/resources/app.asar.unpacked/out/mcp-server-linux-x64` and execs the newest match. Point Claude Code at the stable command name and let the wrapper follow the live mount.
 
@@ -209,7 +208,7 @@ The repo ships a tiny dynamic-resolver wrapper, `update-pencil-mcp`, that at exe
 
 3. **Proxy it into the container** — add `update-pencil-mcp` to `SANDBOX_MAP_PROCESSES`:
    ```bash
-   SANDBOX_MAP_PROCESSES="update-pencil-mcp podman" ./claude-yolo-automate
+   SANDBOX_MAP_PROCESSES="update-pencil-mcp docker" ./claude-yolo-automate
    ```
 
 Inside the container, Claude execs `update-pencil-mcp` → shim → host daemon → host wrapper → current MCP binary. stdio is forwarded end-to-end through the frame protocol, so the MCP handshake completes normally **without any bind-mount of `/tmp/.mount_Pencil*`**.

@@ -11,9 +11,9 @@ Host                                Container
 ┌──────────────────────────┐       ┌──────────────────────────┐
 │ sandbox daemon           │       │ PATH=/ultra_sandbox:...  │
 │  .ultra_sandbox/         │◄─────►│                          │
-│  daemon.sock (unix sock) │ frame │ /ultra_sandbox/podman    │
+│  daemon.sock (unix sock) │ frame │ /ultra_sandbox/docker    │
 │                          │ proto │  └─ shim: sandbox run    │
-│  executes: podman build .│       │         podman "$@"      │
+│  executes: docker build .│       │         docker "$@"      │
 └──────────────────────────┘       └──────────────────────────┘
           ▲
           │ -v .ultra_sandbox:/ultra_sandbox
@@ -34,7 +34,7 @@ ultra-sandbox/
 ├── .ultra_sandbox/       # Runtime directory (auto-created)
 │   ├── sandbox           # Compiled binary
 │   ├── daemon.sock       # Unix socket (while daemon is running)
-│   ├── podman            # Shim created by: sandbox map podman
+│   ├── docker            # Shim created by: sandbox map docker
 │   └── ...               # Other mapped commands
 ├── ultra-sandbox.sh      # Generic container launch script
 ├── claude_code_base.Dockerfile
@@ -73,18 +73,17 @@ Ensure `~/.local/bin` is in your `PATH`.
 
 ```bash
 # Create a shim script in .ultra_sandbox/
-.ultra_sandbox/sandbox map podman
 .ultra_sandbox/sandbox map docker
 .ultra_sandbox/sandbox map adb
 
 # Remove a shim
-.ultra_sandbox/sandbox map podman --remove
+.ultra_sandbox/sandbox map docker --remove
 ```
 
-Shim content (e.g. for podman):
+Shim content (e.g. for docker):
 ```sh
 #!/bin/sh
-exec sandbox run podman "$@"
+exec sandbox run docker "$@"
 ```
 
 ### 3. Start a container
@@ -98,9 +97,9 @@ bash ultra-sandbox/ultra-sandbox.sh
 
 ```bash
 # Works exactly like on the host
-podman ps
-podman build -t myimage .
-podman run -it alpine sh   # full TTY interaction
+docker ps
+docker build -t myimage .
+docker run -it alpine sh   # full TTY interaction
 adb devices
 ```
 

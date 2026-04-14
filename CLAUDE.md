@@ -1,6 +1,6 @@
 # claude-code-yolo
 
-Containerized Claude Code environments using Podman with sandbox command proxying.
+Containerized Claude Code environments using Docker (or Podman) with sandbox command proxying.
 
 ## sandbox setup
 
@@ -42,7 +42,7 @@ Map host commands into the container (run from the directory containing `.ultra_
 
 ```bash
 cd ultra-sandbox
-sandbox map podman
+sandbox map docker
 sandbox map adb
 sandbox map flutter
 ```

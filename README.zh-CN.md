@@ -1,6 +1,6 @@
 # Ultra-sandbox
 
-> 在容器内运行 Claude Code（或任意 CLI 工具）并带上 `--dangerously-skip-permissions`，同时透明地使用**宿主机**上的 `podman`、`flutter`、`adb` 等工具。
+> 在容器内运行 Claude Code（或任意 CLI 工具）并带上 `--dangerously-skip-permissions`，同时透明地使用**宿主机**上的 `docker`、`flutter`、`adb` 等工具。
 
 **语言**: [English](README.md) | 简体中文
 
@@ -15,7 +15,7 @@ Ultra-sandbox 是一套轻量的命令代理系统：宿主机上运行一个微
 ```
 ┌────────────────────────────── 宿主机 ──────────────────────────────┐
 │                                                                    │
-│    真实的 podman / flutter / adb / …                               │
+│    真实的 docker / flutter / adb / …                               │
 │               ▲                                                    │
 │               │ fork + exec                                        │
 │               │                                                    │
@@ -31,7 +31,7 @@ Ultra-sandbox 是一套轻量的命令代理系统：宿主机上运行一个微
 │     .ultra_sandbox/                                                │
 │       ├─ daemon.sock        ◄─── 通过 bind-mount 挂入容器          │
 │       └─ bin/                                                      │
-│          ├─ podman   ─► #!/bin/sh exec sandbox run podman "$@"     │
+│          ├─ docker   ─► #!/bin/sh exec sandbox run docker "$@"     │
 │          ├─ flutter  ─► #!/bin/sh exec sandbox run flutter "$@"    │
 │          └─ adb      ─► #!/bin/sh exec sandbox run adb "$@"        │
 │                                                                    │
@@ -45,11 +45,11 @@ Ultra-sandbox 是一套轻量的命令代理系统：宿主机上运行一个微
 │                                                                   │
 │   Claude Code (--dangerously-skip-permissions)                    │
 │        │                                                          │
-│        │ 调用 `podman build .`                                    │
+│        │ 调用 `docker build .`                                    │
 │        ▼                                                          │
-│   /ultra_sandbox/bin/podman   (shim)                              │
+│   /ultra_sandbox/bin/docker   (shim)                              │
 │        │                                                          │
-│        │ exec sandbox run podman build .                          │
+│        │ exec sandbox run docker build .                          │
 │        ▼                                                          │
 │   /usr/local/bin/sandbox  (客户端)                                │
 │        │                                                          │
@@ -61,7 +61,7 @@ Ultra-sandbox 是一套轻量的命令代理系统：宿主机上运行一个微
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-**核心思路。** 容器本身从不运行 `podman`,而是运行一个仅 3 行的 shell shim,把命令交给 `sandbox` 客户端,再由它通过 Unix socket 转发给宿主机上的守护进程。stdin/stdout/stderr/TTY-resize/信号都通过同一个 socket 上的 3 字节帧协议多路复用,因此在容器内执行 `podman run -it alpine sh` 依然能得到一个在**宿主机**上真正交互的 shell。
+**核心思路。** 容器本身从不运行 `docker`,而是运行一个仅 3 行的 shell shim,把命令交给 `sandbox` 客户端,再由它通过 Unix socket 转发给宿主机上的守护进程。stdin/stdout/stderr/TTY-resize/信号都通过同一个 socket 上的 3 字节帧协议多路复用,因此在容器内执行 `docker run -it alpine sh` 依然能得到一个在**宿主机**上真正交互的 shell。
 
 ---
 
@@ -69,8 +69,7 @@ Ultra-sandbox 是一套轻量的命令代理系统：宿主机上运行一个微
 
 ### 前置条件
 
-- 宿主机上已安装 **`podman`**。macOS/Windows 用户还需先执行 `podman machine init && podman machine start`(容器跑在 Linux 虚拟机中——`--network=host` 指向的是虚拟机而非你的宿主机)。
-- macOS: `brew install podman`。Windows: 安装 [Podman Desktop](https://podman-desktop.io/)。
+- 宿主机上已安装 **Docker**。macOS/Windows: 安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)(它会自动管理 Linux 虚拟机——`--network=host` 指向的是那个虚拟机)。Linux: 用发行版自带的 `docker` 包即可。
 - 把 `~/.local/bin`(Linux/macOS)或 `%USERPROFILE%\.local\bin`(Windows)加入 `PATH`。
 
 ### 1. 运行安装脚本
@@ -100,7 +99,7 @@ cd ultra-sandbox
 | `INSTALL_DIR` | `~/.local/bin` / `%USERPROFILE%\.local\bin` | `sandbox` 和 launcher 的安装位置 |
 | `REPO` | `ZenWayne/ultra-sandbox` | GitHub 仓库 |
 | `RELEASE_TAG` | `latest` | Release 标签 |
-| `IMAGE_TAG` | `claude_code_base` | Podman 镜像名 |
+| `IMAGE_TAG` | `claude_code_base` | Docker 镜像名 |
 | `SKIP_SANDBOX` | — | `=1` 跳过二进制下载 |
 | `SKIP_IMAGE` | — | `=1` 跳过镜像构建 |
 | `SKIP_LAUNCHER` | — | `=1` 跳过 launcher 安装 |
@@ -131,12 +130,12 @@ SANDBOX_MAP_PROCESSES="python" claude-yolo-automate
 > 你能帮我构建这个仓库里的 Docker 镜像吗?
 
 # Claude 执行:
-podman build -t myapp .         # ← 实际在宿主机上运行
+docker build -t myapp .         # ← 实际在宿主机上运行
 ```
 
 - 守护进程会在启动脚本第一次运行时自动拉起。
 - `.ultra_sandbox/daemon.sock` 默认位于 `$HOME/.ultra_sandbox/`(可用 `SANDBOX_DIR` 覆盖)。
-- 需要代理更多命令时,扩展环境变量即可:`SANDBOX_MAP_PROCESSES="podman adb flutter"`。
+- 需要代理更多命令时,扩展环境变量即可:`SANDBOX_MAP_PROCESSES="docker adb flutter"`。
 
 ---
 
@@ -144,7 +143,7 @@ podman build -t myapp .         # ← 实际在宿主机上运行
 
 | 问题 | 传统方案 | Ultra-sandbox 方案 |
 |---|---|---|
-| 容器内需要 `podman build` | Docker-in-Docker、特权容器 | `sandbox map podman` → 透明代理 |
+| 容器内需要 `docker build` | Docker-in-Docker、特权容器 | `sandbox map docker` → 透明代理 |
 | 物理设备需要宿主机 ADB 服务 | 挂载 `/dev/bus/usb`、`--privileged` | `sandbox map adb`、`--network=host` |
 | Flutter 构建污染宿主机 `build/` 目录 | 手动清理 | 在 `build/`、`.dart_tool/` 上叠加命名卷 |
 | Claude Code 会话需持久化 | 每次启动重新登录 | 读写挂载 `~/.claude` + `~/.claude.json` |
@@ -166,7 +165,7 @@ podman build -t myapp .         # ← 实际在宿主机上运行
 两者共享同一套设计:
 
 - `--userns=keep-id` —— 容器内 UID/GID = 宿主机 UID/GID
-- `--network=host` —— 复用宿主机的代理、ADB server、podman daemon
+- `--network=host` —— 复用宿主机的代理、ADB server、docker daemon
 - 将 `$WORK_DIR:$WORK_DIR` 挂载在**同路径**(Claude 在容器内外看到的项目绝对路径一致)
 - 读写挂载 `~/.claude`、`~/.claude.json` —— 持久化会话与认证
 - **只读**挂载 `~/.ssh` —— git over SSH 可用,Claude 无法泄露密钥
@@ -175,19 +174,19 @@ podman build -t myapp .         # ← 实际在宿主机上运行
 ### 示例:用通用启动器加载自定义命令集
 
 ```bash
-SANDBOX_MAP_PROCESSES="podman adb kubectl" ./claude-yolo-automate
+SANDBOX_MAP_PROCESSES="docker adb kubectl" ./claude-yolo-automate
 ```
 
 脚本会:
 1. 若 sandbox daemon 未运行则自动启动。
-2. 在 `$SANDBOX_DIR/bin/{podman,adb,kubectl}` 中生成 shim。
+2. 在 `$SANDBOX_DIR/bin/{docker,adb,kubectl}` 中生成 shim。
 3. 启动 `claude_code_base`,挂载 `.ultra_sandbox/` 并设置 `PATH`。
 
 ---
 
 ## 模式:代理路径会变化的 MCP stdio 服务
 
-部分应用以 AppImage 形式分发,启动时会把自己挂到一个随机路径上——例如 [Pencil](https://getpencil.dev/) 每次出现在 `/tmp/.mount_Pencil<随机串>/`,其自带的 MCP server 位于 `/tmp/.mount_Pencil<随机串>/resources/app.asar.unpacked/out/mcp-server-linux-x64`。把这个路径硬编码进 `~/.claude.json` 意味着每次重启都要手改,而且在容器内这个 FUSE 挂载根本不可访问(podman+crun 在 `--userns=keep-id` 下无法 bind-mount FUSE 源)。
+部分应用以 AppImage 形式分发,启动时会把自己挂到一个随机路径上——例如 [Pencil](https://getpencil.dev/) 每次出现在 `/tmp/.mount_Pencil<随机串>/`,其自带的 MCP server 位于 `/tmp/.mount_Pencil<随机串>/resources/app.asar.unpacked/out/mcp-server-linux-x64`。把这个路径硬编码进 `~/.claude.json` 意味着每次重启都要手改,而且在容器内这个 FUSE 挂载根本不可访问(rootless 容器运行时无法 bind-mount FUSE 源)。
 
 仓库提供了一个小巧的动态解析包装脚本 `update-pencil-mcp`:在 exec 时扫描 `/tmp/.mount_Pencil*/resources/app.asar.unpacked/out/mcp-server-linux-x64`,然后 exec 到最新的那个。让 Claude Code 指向这个稳定的命令名,由包装脚本跟随活动挂载点即可。
 
@@ -209,7 +208,7 @@ SANDBOX_MAP_PROCESSES="podman adb kubectl" ./claude-yolo-automate
 
 3. **把它代理进容器** —— 将 `update-pencil-mcp` 加入 `SANDBOX_MAP_PROCESSES`:
    ```bash
-   SANDBOX_MAP_PROCESSES="update-pencil-mcp podman" ./claude-yolo-automate
+   SANDBOX_MAP_PROCESSES="update-pencil-mcp docker" ./claude-yolo-automate
    ```
 
 在容器内,Claude 执行 `update-pencil-mcp` → shim → 宿主机 daemon → 宿主机 wrapper → 当前的 MCP 二进制。stdio 通过帧协议端到端转发,MCP 握手能正常完成,**无需**对 `/tmp/.mount_Pencil*` 做任何 bind-mount。
