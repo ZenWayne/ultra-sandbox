@@ -312,6 +312,37 @@ fn save_command_map(map: &HashMap<String, String>) {
 }
 
 // ---------------------------------------------------------------------------
+// Policy: matching
+// ---------------------------------------------------------------------------
+
+fn extract_path(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--" {
+            i += 1;
+            while i < args.len() {
+                out.push(args[i].clone());
+                i += 1;
+            }
+            break;
+        }
+        if a.starts_with('-') {
+            if a.contains('=') {
+                i += 1;
+            } else {
+                i += 2;
+            }
+            continue;
+        }
+        out.push(a.clone());
+        i += 1;
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Daemon
 // ---------------------------------------------------------------------------
 
@@ -917,8 +948,69 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
 
+    fn s(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|p| p.to_string()).collect()
+    }
+
     #[test]
-    fn smoke() {
-        assert_eq!(2 + 2, 4);
+    fn extract_path_empty() {
+        assert_eq!(extract_path(&[] as &[String]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn extract_path_simple_positional() {
+        assert_eq!(extract_path(&s(&["rm", "myctr"])), s(&["rm", "myctr"]));
+    }
+
+    #[test]
+    fn extract_path_skips_flag_with_equals() {
+        assert_eq!(
+            extract_path(&s(&["--log-level=debug", "rm", "myctr"])),
+            s(&["rm", "myctr"])
+        );
+    }
+
+    #[test]
+    fn extract_path_skips_flag_and_value() {
+        assert_eq!(
+            extract_path(&s(&["--log-level", "debug", "rm"])),
+            s(&["rm"])
+        );
+    }
+
+    #[test]
+    fn extract_path_double_dash_ends_options() {
+        assert_eq!(extract_path(&s(&["--", "rm"])), s(&["rm"]));
+    }
+
+    #[test]
+    fn extract_path_short_flag_swallows_next_token() {
+        // Documented limitation: -f is treated as taking a value, so "rm" is consumed.
+        assert_eq!(extract_path(&s(&["-f", "rm"])), Vec::<String>::new());
+    }
+
+    #[test]
+    fn extract_path_mixed_leading_equals_flag() {
+        assert_eq!(
+            extract_path(&s(&["--log-level=debug", "system", "prune"])),
+            s(&["system", "prune"])
+        );
+    }
+
+    #[test]
+    fn extract_path_equals_flag_in_middle_preserves_path() {
+        assert_eq!(
+            extract_path(&s(&["system", "--force=true", "prune"])),
+            s(&["system", "prune"])
+        );
+    }
+
+    #[test]
+    fn extract_path_bool_flag_in_middle_swallows_next() {
+        // Documented limitation: --force is assumed to take a value, so "prune" is consumed.
+        assert_eq!(
+            extract_path(&s(&["system", "--force", "prune"])),
+            s(&["system"])
+        );
     }
 }
