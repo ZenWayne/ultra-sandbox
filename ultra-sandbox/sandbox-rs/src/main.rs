@@ -312,6 +312,26 @@ fn save_command_map(map: &HashMap<String, String>) {
 }
 
 // ---------------------------------------------------------------------------
+// Policy: types and persistence
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CommandPolicy {
+    #[serde(default)]
+    deny: Vec<Vec<String>>,
+    #[serde(default)]
+    allow: Vec<Vec<String>>,
+}
+
+type PolicyMap = HashMap<String, CommandPolicy>;
+
+#[derive(Debug)]
+enum PolicyDenial {
+    Deny(Vec<String>),
+    AllowMiss,
+}
+
+// ---------------------------------------------------------------------------
 // Policy: matching
 // ---------------------------------------------------------------------------
 
@@ -345,6 +365,28 @@ fn extract_path(args: &[String]) -> Vec<String> {
 fn matches_path(rule: &[String], path: &[String]) -> bool {
     rule.len() <= path.len()
         && rule.iter().zip(path.iter()).all(|(r, p)| r == p)
+}
+
+fn check_policy(
+    policy: Option<&CommandPolicy>,
+    path: &[String],
+) -> Result<(), PolicyDenial> {
+    let Some(p) = policy else {
+        return Ok(());
+    };
+
+    for rule in &p.deny {
+        if matches_path(rule, path) {
+            return Err(PolicyDenial::Deny(rule.clone()));
+        }
+    }
+    if !p.allow.is_empty() {
+        let ok = p.allow.iter().any(|rule| matches_path(rule, path));
+        if !ok {
+            return Err(PolicyDenial::AllowMiss);
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -957,6 +999,10 @@ mod tests {
         parts.iter().map(|p| p.to_string()).collect()
     }
 
+    fn rule(parts: &[&str]) -> Vec<String> {
+        s(parts)
+    }
+
     #[test]
     fn extract_path_empty() {
         assert_eq!(extract_path(&[] as &[String]), Vec::<String>::new());
@@ -1046,5 +1092,77 @@ mod tests {
         // refactor can't silently change it.
         assert!(matches_path(&[] as &[String], &s(&["anything"])));
         assert!(matches_path(&[] as &[String], &[] as &[String]));
+    }
+
+    #[test]
+    fn check_policy_none_is_ok() {
+        assert!(matches!(check_policy(None, &s(&["rm"])), Ok(())));
+    }
+
+    #[test]
+    fn check_policy_empty_lists_is_ok() {
+        let p = CommandPolicy::default();
+        assert!(matches!(check_policy(Some(&p), &s(&["rm"])), Ok(())));
+    }
+
+    #[test]
+    fn check_policy_matching_deny_returns_deny_with_rule() {
+        let p = CommandPolicy {
+            deny: vec![rule(&["rm"])],
+            allow: vec![],
+        };
+        match check_policy(Some(&p), &s(&["rm", "foo"])) {
+            Err(PolicyDenial::Deny(r)) => assert_eq!(r, rule(&["rm"])),
+            other => panic!("expected Deny, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn check_policy_allow_miss_returns_allow_miss() {
+        let p = CommandPolicy {
+            deny: vec![],
+            allow: vec![rule(&["get"]), rule(&["describe"])],
+        };
+        assert!(matches!(
+            check_policy(Some(&p), &s(&["delete", "pods", "foo"])),
+            Err(PolicyDenial::AllowMiss)
+        ));
+    }
+
+    #[test]
+    fn check_policy_allow_hit_is_ok() {
+        let p = CommandPolicy {
+            deny: vec![],
+            allow: vec![rule(&["get"])],
+        };
+        assert!(matches!(
+            check_policy(Some(&p), &s(&["get", "pods"])),
+            Ok(())
+        ));
+    }
+
+    #[test]
+    fn check_policy_deny_wins_over_allow_match() {
+        // Both deny and allow would match. Deny is checked first and must win.
+        let p = CommandPolicy {
+            deny: vec![rule(&["system", "prune"])],
+            allow: vec![rule(&["system"])],
+        };
+        match check_policy(Some(&p), &s(&["system", "prune", "-a"])) {
+            Err(PolicyDenial::Deny(r)) => assert_eq!(r, rule(&["system", "prune"])),
+            other => panic!("expected Deny(system prune), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn check_policy_empty_path_with_active_allow_is_blocked() {
+        let p = CommandPolicy {
+            deny: vec![],
+            allow: vec![rule(&["get"])],
+        };
+        assert!(matches!(
+            check_policy(Some(&p), &[] as &[String]),
+            Err(PolicyDenial::AllowMiss)
+        ));
     }
 }
