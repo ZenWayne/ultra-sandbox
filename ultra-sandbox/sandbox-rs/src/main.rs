@@ -342,6 +342,11 @@ fn extract_path(args: &[String]) -> Vec<String> {
     out
 }
 
+fn matches_path(rule: &[String], path: &[String]) -> bool {
+    rule.len() <= path.len()
+        && rule.iter().zip(path.iter()).all(|(r, p)| r == p)
+}
+
 // ---------------------------------------------------------------------------
 // Daemon
 // ---------------------------------------------------------------------------
@@ -1012,5 +1017,34 @@ mod tests {
             extract_path(&s(&["system", "--force", "prune"])),
             s(&["system"])
         );
+    }
+
+    #[test]
+    fn matches_path_rule_is_prefix_of_path() {
+        assert!(matches_path(&s(&["rm"]), &s(&["rm", "myctr"])));
+    }
+
+    #[test]
+    fn matches_path_exact_equality() {
+        assert!(matches_path(&s(&["system", "prune"]), &s(&["system", "prune"])));
+    }
+
+    #[test]
+    fn matches_path_rule_longer_than_path() {
+        assert!(!matches_path(&s(&["system", "prune"]), &s(&["system"])));
+    }
+
+    #[test]
+    fn matches_path_token_equality_not_substring() {
+        assert!(!matches_path(&s(&["rm"]), &s(&["rmi"])));
+    }
+
+    #[test]
+    fn matches_path_empty_rule_matches_anything() {
+        // Defensive: empty rules are dropped on load (Task 5), but if one slips
+        // through it would match every path. Lock that behavior in so a future
+        // refactor can't silently change it.
+        assert!(matches_path(&[] as &[String], &s(&["anything"])));
+        assert!(matches_path(&[] as &[String], &[] as &[String]));
     }
 }
