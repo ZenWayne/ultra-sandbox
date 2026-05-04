@@ -45,6 +45,15 @@ sandbox map adb
 sandbox map flutter
 ```
 
+Block specific subcommands per mapped command:
+
+```bash
+sandbox policy deny podman rm
+sandbox policy deny podman system prune
+sandbox policy allow kubectl get
+sandbox policy list
+```
+
 Then launch the container:
 
 ```bash
