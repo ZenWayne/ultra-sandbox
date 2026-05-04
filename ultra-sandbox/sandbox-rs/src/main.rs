@@ -331,6 +331,60 @@ enum PolicyDenial {
     AllowMiss,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PolicyListKind {
+    Deny,
+    Allow,
+}
+
+fn policy_path() -> PathBuf {
+    sandbox_dir().join("policy.json")
+}
+
+fn load_policy_at(path: &Path) -> PolicyMap {
+    let data = match fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return PolicyMap::new(),
+    };
+    let mut map: PolicyMap = match serde_json::from_slice(&data) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "sandbox: warning: {} is not valid JSON ({}); ignoring policy",
+                path.display(),
+                e
+            );
+            return PolicyMap::new();
+        }
+    };
+    // Drop empty rules defensively — they would match every path.
+    for entry in map.values_mut() {
+        entry.deny.retain(|r| !r.is_empty());
+        entry.allow.retain(|r| !r.is_empty());
+    }
+    map
+}
+
+fn load_policy() -> PolicyMap {
+    load_policy_at(&policy_path())
+}
+
+fn save_policy_at(path: &Path, map: &PolicyMap) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(map)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    fs::write(&tmp, &json)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+fn save_policy(map: &PolicyMap) -> io::Result<()> {
+    save_policy_at(&policy_path(), map)
+}
+
 // ---------------------------------------------------------------------------
 // Policy: matching
 // ---------------------------------------------------------------------------
@@ -387,6 +441,262 @@ fn check_policy(
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Policy: mutation helpers (pure, operate on PolicyMap in memory)
+// ---------------------------------------------------------------------------
+
+fn add_rule(map: &mut PolicyMap, cmd: &str, rule: Vec<String>, kind: PolicyListKind) {
+    let entry = map.entry(cmd.to_string()).or_default();
+    let target = match kind {
+        PolicyListKind::Deny => &mut entry.deny,
+        PolicyListKind::Allow => &mut entry.allow,
+    };
+    if !target.contains(&rule) {
+        target.push(rule);
+    }
+}
+
+fn remove_rule(map: &mut PolicyMap, cmd: &str, rule: &[String]) -> bool {
+    let Some(entry) = map.get_mut(cmd) else {
+        return false;
+    };
+    let before = entry.deny.len() + entry.allow.len();
+    entry.deny.retain(|r| r.as_slice() != rule);
+    entry.allow.retain(|r| r.as_slice() != rule);
+    let after = entry.deny.len() + entry.allow.len();
+    before != after
+}
+
+fn clear_command_policy(map: &mut PolicyMap, cmd: &str) -> bool {
+    map.remove(cmd).is_some()
+}
+
+// ---------------------------------------------------------------------------
+// Policy: human-readable formatting (for `sandbox policy list`)
+// ---------------------------------------------------------------------------
+
+fn format_command_policy(name: &str, policy: Option<&CommandPolicy>) -> String {
+    let Some(p) = policy else {
+        return format!("no policy for {}\n", name);
+    };
+    let mut out = String::new();
+    out.push_str(name);
+    out.push_str(":\n");
+
+    out.push_str("  deny:  ");
+    if p.deny.is_empty() {
+        out.push_str("(empty)\n");
+    } else {
+        for (i, r) in p.deny.iter().enumerate() {
+            if i > 0 {
+                out.push_str("         ");
+            }
+            out.push_str(&r.join(" "));
+            out.push('\n');
+        }
+    }
+
+    out.push_str("  allow: ");
+    if p.allow.is_empty() {
+        out.push_str("(empty)\n");
+    } else {
+        for (i, r) in p.allow.iter().enumerate() {
+            if i > 0 {
+                out.push_str("         ");
+            }
+            out.push_str(&r.join(" "));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn format_full_policy(map: &PolicyMap) -> String {
+    if map.is_empty() {
+        return "no policy configured\n".to_string();
+    }
+    let mut names: Vec<&String> = map.keys().collect();
+    names.sort();
+    let mut out = String::new();
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format_command_policy(name, map.get(*name)));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Policy: CLI dispatcher
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+enum PolicyOp {
+    Add { cmd: String, path: Vec<String>, kind: PolicyListKind },
+    Unset { cmd: String, path: Vec<String> },
+    Clear { cmd: String },
+    List { cmd: Option<String> },
+}
+
+fn parse_policy_args(args: &[String]) -> Result<PolicyOp, String> {
+    let verb = args.first().ok_or_else(|| "missing verb".to_string())?;
+    match verb.as_str() {
+        "deny" | "allow" => {
+            let kind = if verb == "deny" {
+                PolicyListKind::Deny
+            } else {
+                PolicyListKind::Allow
+            };
+            let cmd = args
+                .get(1)
+                .ok_or_else(|| format!("usage: sandbox policy {} <cmd> <subcmd-path...>", verb))?
+                .clone();
+            let path: Vec<String> = args.iter().skip(2).cloned().collect();
+            if path.is_empty() {
+                return Err(format!(
+                    "usage: sandbox policy {} <cmd> <subcmd-path...>",
+                    verb
+                ));
+            }
+            Ok(PolicyOp::Add { cmd, path, kind })
+        }
+        "unset" => {
+            let cmd = args
+                .get(1)
+                .ok_or_else(|| "usage: sandbox policy unset <cmd> <subcmd-path...>".to_string())?
+                .clone();
+            let path: Vec<String> = args.iter().skip(2).cloned().collect();
+            if path.is_empty() {
+                return Err("usage: sandbox policy unset <cmd> <subcmd-path...>".to_string());
+            }
+            Ok(PolicyOp::Unset { cmd, path })
+        }
+        "clear" => {
+            let cmd = args
+                .get(1)
+                .ok_or_else(|| "usage: sandbox policy clear <cmd>".to_string())?
+                .clone();
+            if args.len() > 2 {
+                return Err("usage: sandbox policy clear <cmd>".to_string());
+            }
+            Ok(PolicyOp::Clear { cmd })
+        }
+        "list" => {
+            let cmd = args.get(1).cloned();
+            if args.len() > 2 {
+                return Err("usage: sandbox policy list [<cmd>]".to_string());
+            }
+            Ok(PolicyOp::List { cmd })
+        }
+        other => Err(format!(
+            "sandbox policy: unknown verb '{}' (expected deny|allow|unset|list|clear)",
+            other
+        )),
+    }
+}
+
+fn run_policy(args: &[String]) {
+    let op = match parse_policy_args(args) {
+        Ok(op) => op,
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
+    };
+
+    let path = policy_path();
+    let mut map = load_policy_at(&path);
+
+    match op {
+        PolicyOp::Add { cmd, path: rule, kind } => {
+            add_rule(&mut map, &cmd, rule, kind);
+            if let Err(e) = save_policy_at(&path, &map) {
+                eprintln!("sandbox policy: write {}: {}", path.display(), e);
+                process::exit(1);
+            }
+        }
+        PolicyOp::Unset { cmd, path: rule } => {
+            if !remove_rule(&mut map, &cmd, &rule) {
+                eprintln!(
+                    "sandbox policy: no such rule for '{}': {}",
+                    cmd,
+                    rule.join(" ")
+                );
+                process::exit(1);
+            }
+            if let Err(e) = save_policy_at(&path, &map) {
+                eprintln!("sandbox policy: write {}: {}", path.display(), e);
+                process::exit(1);
+            }
+        }
+        PolicyOp::Clear { cmd } => {
+            if !clear_command_policy(&mut map, &cmd) {
+                eprintln!("sandbox policy: no policy for '{}'", cmd);
+                process::exit(1);
+            }
+            if let Err(e) = save_policy_at(&path, &map) {
+                eprintln!("sandbox policy: write {}: {}", path.display(), e);
+                process::exit(1);
+            }
+        }
+        PolicyOp::List { cmd: None } => {
+            print!("{}", format_full_policy(&map));
+        }
+        PolicyOp::List { cmd: Some(c) } => {
+            print!("{}", format_command_policy(&c, map.get(&c)));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Policy: denial messages (used by handle_client)
+// ---------------------------------------------------------------------------
+
+fn format_denial_message(cmd: &str, denial: &PolicyDenial) -> String {
+    match denial {
+        PolicyDenial::Deny(rule) => {
+            format!("sandbox: '{} {}' denied by policy\n", cmd, rule.join(" "))
+        }
+        PolicyDenial::AllowMiss => {
+            format!("sandbox: '{}' not in allow-list\n", cmd)
+        }
+    }
+}
+
+fn format_denial_message_allow_miss(cmd: &str, attempted_path: &[String]) -> String {
+    if attempted_path.is_empty() {
+        format!("sandbox: '{}' not in allow-list\n", cmd)
+    } else {
+        format!(
+            "sandbox: '{} {}' not in allow-list\n",
+            cmd,
+            attempted_path.join(" ")
+        )
+    }
+}
+
+fn format_denial_log(cmd: &str, argv: &[String], denial: &PolicyDenial) -> String {
+    let argv_joined = argv.join(" ");
+    let argv_part = if argv_joined.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", argv_joined)
+    };
+    match denial {
+        PolicyDenial::Deny(rule) => format!(
+            "sandbox daemon: blocked {}{} (deny rule: {})",
+            cmd,
+            argv_part,
+            rule.join(" ")
+        ),
+        PolicyDenial::AllowMiss => format!(
+            "sandbox daemon: blocked {}{} (allow-list miss)",
+            cmd, argv_part
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +809,7 @@ fn handle_client(mut conn: UnixStream) -> io::Result<()> {
 
     // Whitelist check: only mapped commands are allowed.
     let map = load_command_map();
+    let map_key = req.cmd.clone();
     match map.get(&req.cmd) {
         Some(resolved) => req.cmd = resolved.clone(),
         None => {
@@ -507,6 +818,21 @@ fn handle_client(mut conn: UnixStream) -> io::Result<()> {
             let _ = write_frame(&mut conn, FRAME_EXIT, &encode_exit(1));
             return Ok(());
         }
+    }
+
+    // Policy check: deny-list / allow-list per mapped command.
+    let policy_map = load_policy();
+    let path = extract_path(&req.args);
+    if let Err(denial) = check_policy(policy_map.get(&map_key), &path) {
+        let user_msg = match &denial {
+            PolicyDenial::Deny(_) => format_denial_message(&map_key, &denial),
+            PolicyDenial::AllowMiss => format_denial_message_allow_miss(&map_key, &path),
+        };
+        let log_line = format_denial_log(&map_key, &req.args, &denial);
+        eprintln!("{}", log_line);
+        let _ = write_frame(&mut conn, FRAME_STDERR, user_msg.as_bytes());
+        let _ = write_frame(&mut conn, FRAME_EXIT, &encode_exit(126));
+        return Ok(());
     }
 
     if req.tty {
@@ -903,6 +1229,9 @@ fn usage() -> ! {
          $SANDBOX_BIN_DIR (default $SANDBOX_DIR/bin)"
     );
     eprintln!("    --exec PATH  resolve alias to a specific host script/binary path");
+    eprintln!("  sandbox policy deny|allow|unset <cmd> <subcmd-path...>  manage per-command policy");
+    eprintln!("  sandbox policy list [<cmd>]                              show current policy");
+    eprintln!("  sandbox policy clear <cmd>                               drop all rules for cmd");
     process::exit(1);
 }
 
@@ -979,6 +1308,10 @@ fn main() {
             let bin_dir = shim_bin_dir();
             let _ = fs::create_dir_all(&bin_dir);
             run_map(&bin_dir, cmd_name, exec_path.as_deref(), remove);
+        }
+        "policy" => {
+            let rest: Vec<String> = args.iter().skip(2).cloned().collect();
+            run_policy(&rest);
         }
         _ => {
             usage();
@@ -1164,5 +1497,328 @@ mod tests {
             check_policy(Some(&p), &[] as &[String]),
             Err(PolicyDenial::AllowMiss)
         ));
+    }
+
+    // --- Task 5: persistence tests ---
+
+    use tempfile::TempDir;
+
+    #[test]
+    fn save_then_load_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("policy.json");
+
+        let mut map = PolicyMap::new();
+        map.insert(
+            "podman".into(),
+            CommandPolicy {
+                deny: vec![rule(&["rm"]), rule(&["system", "prune"])],
+                allow: vec![],
+            },
+        );
+        map.insert(
+            "kubectl".into(),
+            CommandPolicy {
+                deny: vec![],
+                allow: vec![rule(&["get"]), rule(&["describe"])],
+            },
+        );
+
+        save_policy_at(&path, &map).unwrap();
+        let loaded = load_policy_at(&path);
+
+        assert_eq!(loaded.len(), 2);
+        let p = loaded.get("podman").unwrap();
+        assert_eq!(p.deny, vec![rule(&["rm"]), rule(&["system", "prune"])]);
+        assert!(p.allow.is_empty());
+        let k = loaded.get("kubectl").unwrap();
+        assert!(k.deny.is_empty());
+        assert_eq!(k.allow, vec![rule(&["get"]), rule(&["describe"])]);
+    }
+
+    #[test]
+    fn load_missing_file_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("does-not-exist.json");
+        let loaded = load_policy_at(&path);
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_malformed_file_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("policy.json");
+        std::fs::write(&path, b"not valid json {{{").unwrap();
+        let loaded = load_policy_at(&path);
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_drops_empty_rules_defensively() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("policy.json");
+        std::fs::write(
+            &path,
+            br#"{"podman":{"deny":[[],["rm"]],"allow":[[]]}}"#,
+        )
+        .unwrap();
+        let loaded = load_policy_at(&path);
+        let p = loaded.get("podman").unwrap();
+        assert_eq!(p.deny, vec![rule(&["rm"])]);
+        assert!(p.allow.is_empty());
+    }
+
+    #[test]
+    fn save_uses_atomic_rename() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("policy.json");
+        let tmp_path = path.with_extension("json.tmp");
+
+        let map = PolicyMap::new();
+        save_policy_at(&path, &map).unwrap();
+
+        assert!(path.exists());
+        assert!(!tmp_path.exists());
+    }
+
+    // --- Task 6: mutation helper tests ---
+
+    #[test]
+    fn add_rule_inserts_into_deny_creating_entry() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        let p = map.get("podman").unwrap();
+        assert_eq!(p.deny, vec![rule(&["rm"])]);
+        assert!(p.allow.is_empty());
+    }
+
+    #[test]
+    fn add_rule_inserts_into_allow() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "kubectl", rule(&["get"]), PolicyListKind::Allow);
+        let p = map.get("kubectl").unwrap();
+        assert_eq!(p.allow, vec![rule(&["get"])]);
+        assert!(p.deny.is_empty());
+    }
+
+    #[test]
+    fn add_rule_is_idempotent() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        assert_eq!(map.get("podman").unwrap().deny, vec![rule(&["rm"])]);
+    }
+
+    #[test]
+    fn remove_rule_returns_true_when_present_in_deny() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        add_rule(&mut map, "podman", rule(&["kill"]), PolicyListKind::Deny);
+        assert!(remove_rule(&mut map, "podman", &rule(&["rm"])));
+        assert_eq!(map.get("podman").unwrap().deny, vec![rule(&["kill"])]);
+    }
+
+    #[test]
+    fn remove_rule_returns_true_when_present_in_allow() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "kubectl", rule(&["get"]), PolicyListKind::Allow);
+        assert!(remove_rule(&mut map, "kubectl", &rule(&["get"])));
+        assert!(map.get("kubectl").unwrap().allow.is_empty());
+    }
+
+    #[test]
+    fn remove_rule_returns_false_for_missing_command() {
+        let mut map = PolicyMap::new();
+        assert!(!remove_rule(&mut map, "podman", &rule(&["rm"])));
+    }
+
+    #[test]
+    fn remove_rule_returns_false_for_missing_rule() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        assert!(!remove_rule(&mut map, "podman", &rule(&["kill"])));
+    }
+
+    #[test]
+    fn clear_command_policy_removes_entry() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        assert!(clear_command_policy(&mut map, "podman"));
+        assert!(map.get("podman").is_none());
+    }
+
+    #[test]
+    fn clear_command_policy_returns_false_when_absent() {
+        let mut map = PolicyMap::new();
+        assert!(!clear_command_policy(&mut map, "podman"));
+    }
+
+    // --- Task 7: format helper tests ---
+
+    #[test]
+    fn format_command_policy_with_rules() {
+        let p = CommandPolicy {
+            deny: vec![rule(&["rm"]), rule(&["system", "prune"]), rule(&["volume", "rm"])],
+            allow: vec![],
+        };
+        let out = format_command_policy("podman", Some(&p));
+        let expected = "\
+podman:
+  deny:  rm
+         system prune
+         volume rm
+  allow: (empty)
+";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn format_command_policy_allow_only() {
+        let p = CommandPolicy {
+            deny: vec![],
+            allow: vec![rule(&["get"]), rule(&["describe"])],
+        };
+        let out = format_command_policy("kubectl", Some(&p));
+        let expected = "\
+kubectl:
+  deny:  (empty)
+  allow: get
+         describe
+";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn format_command_policy_absent() {
+        let out = format_command_policy("missing", None);
+        assert_eq!(out, "no policy for missing\n");
+    }
+
+    #[test]
+    fn format_full_policy_empty() {
+        let map = PolicyMap::new();
+        assert_eq!(format_full_policy(&map), "no policy configured\n");
+    }
+
+    #[test]
+    fn format_full_policy_sorted_by_command_name() {
+        let mut map = PolicyMap::new();
+        add_rule(&mut map, "zsh", rule(&["completion"]), PolicyListKind::Allow);
+        add_rule(&mut map, "podman", rule(&["rm"]), PolicyListKind::Deny);
+        add_rule(&mut map, "adb", rule(&["shell"]), PolicyListKind::Allow);
+        let out = format_full_policy(&map);
+        let adb_pos = out.find("adb:").unwrap();
+        let podman_pos = out.find("podman:").unwrap();
+        let zsh_pos = out.find("zsh:").unwrap();
+        assert!(adb_pos < podman_pos);
+        assert!(podman_pos < zsh_pos);
+    }
+
+    // --- Task 8: CLI dispatcher tests ---
+
+    #[test]
+    fn parse_policy_args_deny() {
+        let args = s(&["deny", "podman", "system", "prune"]);
+        let op = parse_policy_args(&args).unwrap();
+        assert!(matches!(
+            op,
+            PolicyOp::Add { ref cmd, ref path, kind: PolicyListKind::Deny }
+                if cmd == "podman" && path == &rule(&["system", "prune"])
+        ));
+    }
+
+    #[test]
+    fn parse_policy_args_allow() {
+        let args = s(&["allow", "kubectl", "get"]);
+        let op = parse_policy_args(&args).unwrap();
+        assert!(matches!(
+            op,
+            PolicyOp::Add { ref cmd, ref path, kind: PolicyListKind::Allow }
+                if cmd == "kubectl" && path == &rule(&["get"])
+        ));
+    }
+
+    #[test]
+    fn parse_policy_args_unset() {
+        let args = s(&["unset", "podman", "rm"]);
+        let op = parse_policy_args(&args).unwrap();
+        assert!(matches!(
+            op,
+            PolicyOp::Unset { ref cmd, ref path }
+                if cmd == "podman" && path == &rule(&["rm"])
+        ));
+    }
+
+    #[test]
+    fn parse_policy_args_clear() {
+        let args = s(&["clear", "podman"]);
+        let op = parse_policy_args(&args).unwrap();
+        assert!(matches!(op, PolicyOp::Clear { ref cmd } if cmd == "podman"));
+    }
+
+    #[test]
+    fn parse_policy_args_list_all() {
+        let args = s(&["list"]);
+        let op = parse_policy_args(&args).unwrap();
+        assert!(matches!(op, PolicyOp::List { cmd: None }));
+    }
+
+    #[test]
+    fn parse_policy_args_list_one() {
+        let args = s(&["list", "podman"]);
+        let op = parse_policy_args(&args).unwrap();
+        assert!(matches!(op, PolicyOp::List { cmd: Some(ref c) } if c == "podman"));
+    }
+
+    #[test]
+    fn parse_policy_args_deny_without_path_errors() {
+        let args = s(&["deny", "podman"]);
+        assert!(parse_policy_args(&args).is_err());
+    }
+
+    #[test]
+    fn parse_policy_args_unknown_verb_errors() {
+        let args = s(&["bogus", "podman"]);
+        assert!(parse_policy_args(&args).is_err());
+    }
+
+    #[test]
+    fn parse_policy_args_no_verb_errors() {
+        let args = s(&[]);
+        assert!(parse_policy_args(&args).is_err());
+    }
+
+    // --- Task 10: denial message format tests ---
+
+    #[test]
+    fn format_denial_message_for_deny_rule() {
+        let denial = PolicyDenial::Deny(rule(&["system", "prune"]));
+        let msg = format_denial_message("podman", &denial);
+        assert_eq!(msg, "sandbox: 'podman system prune' denied by policy\n");
+    }
+
+    #[test]
+    fn format_denial_message_for_allow_miss() {
+        let denial = PolicyDenial::AllowMiss;
+        let path = rule(&["exec", "myctr", "bash"]);
+        let msg = format_denial_message_allow_miss("podman", &path);
+        assert_eq!(msg, "sandbox: 'podman exec myctr bash' not in allow-list\n");
+    }
+
+    #[test]
+    fn format_denial_log_line_deny() {
+        let argv = s(&["rm", "myctr"]);
+        let denial = PolicyDenial::Deny(rule(&["rm"]));
+        let line = format_denial_log("podman", &argv, &denial);
+        assert_eq!(line, "sandbox daemon: blocked podman rm myctr (deny rule: rm)");
+    }
+
+    #[test]
+    fn format_denial_log_line_allow_miss() {
+        let argv = s(&["exec", "myctr", "bash"]);
+        let denial = PolicyDenial::AllowMiss;
+        let line = format_denial_log("podman", &argv, &denial);
+        assert_eq!(line, "sandbox daemon: blocked podman exec myctr bash (allow-list miss)");
     }
 }
