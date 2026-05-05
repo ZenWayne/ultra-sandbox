@@ -4,6 +4,11 @@
 # Environment variables:
 #   SANDBOX_MAP_PROCESSES   space-separated commands to proxy (e.g. "podman adb")
 #   SANDBOX_DIR             shim/socket dir (default: ~/.ultra_sandbox)
+#   SANDBOX_PODMAN_POLICY   when podman is mapped, controls the auto-injected
+#                           policy. "build-only" (default) restricts the
+#                           in-container podman to image build/inspection
+#                           verbs only. "none" disables injection so the
+#                           caller manages policy via `sandbox policy`.
 
 set -e
 
@@ -72,6 +77,22 @@ if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
     done
 
     echo "=== sandbox mapped: $SANDBOX_MAP_PROCESSES ==="
+
+    # Auto-inject build-only podman policy. `allow` is additive and
+    # idempotent (per sandbox-policy spec), so re-running every launch is
+    # safe; user-added rules from prior `sandbox policy allow podman <verb>`
+    # invocations persist across launches.
+    SANDBOX_PODMAN_POLICY="${SANDBOX_PODMAN_POLICY:-build-only}"
+    case " $SANDBOX_MAP_PROCESSES " in
+        *" podman "*)
+            if [ "$SANDBOX_PODMAN_POLICY" = "build-only" ]; then
+                for verb in build images inspect version info; do
+                    sandbox policy allow podman "$verb" >/dev/null
+                done
+                echo "=== podman policy: allow-list = build images inspect version info ==="
+            fi
+            ;;
+    esac
 fi
 
 # --- Launch container --------------------------------------------------------
