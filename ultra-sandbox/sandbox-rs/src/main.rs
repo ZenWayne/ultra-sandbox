@@ -381,10 +381,6 @@ fn save_policy_at(path: &Path, map: &PolicyMap) -> io::Result<()> {
     Ok(())
 }
 
-fn save_policy(map: &PolicyMap) -> io::Result<()> {
-    save_policy_at(&policy_path(), map)
-}
-
 // ---------------------------------------------------------------------------
 // Policy: matching
 // ---------------------------------------------------------------------------
