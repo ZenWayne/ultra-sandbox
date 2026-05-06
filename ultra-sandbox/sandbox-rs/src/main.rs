@@ -225,18 +225,29 @@ fn signal_process_group(pid: u32, sig: u8) {
 }
 
 #[cfg(unix)]
-fn setup_daemon_signals(cleanup_path: PathBuf) {
+fn setup_daemon_signals(cleanup_path: PathBuf, our_inode: Option<u64>) {
+    use std::os::unix::fs::MetadataExt;
     let mut sigs = Signals::new([SIGINT, SIGTERM]).expect("signal setup");
     thread::spawn(move || {
         if sigs.forever().next().is_some() {
-            let _ = fs::remove_file(&cleanup_path);
+            // Only unlink if the path still resolves to OUR bound inode.
+            // After a `unlink + bind` by a newer daemon, this path points to
+            // someone else's socket — removing it would silently kill the
+            // live daemon's reachability. Orphaned daemons must leave it alone.
+            let safe = match (our_inode, fs::metadata(&cleanup_path)) {
+                (Some(ours), Ok(m)) => m.ino() == ours,
+                _ => false,
+            };
+            if safe {
+                let _ = fs::remove_file(&cleanup_path);
+            }
             process::exit(0);
         }
     });
 }
 
 #[cfg(windows)]
-fn setup_daemon_signals(cleanup_path: PathBuf) {
+fn setup_daemon_signals(cleanup_path: PathBuf, _our_inode: Option<u64>) {
     ctrlc::set_handler(move || {
         let _ = fs::remove_file(&cleanup_path);
         process::exit(0);
@@ -321,7 +332,21 @@ fn run_daemon(sock_path: &Path) -> io::Result<()> {
     set_permissions(sock_path, 0o660);
     eprintln!("sandbox daemon: listening on {}", sock_path.display());
 
-    setup_daemon_signals(sock_path.to_path_buf());
+    // Capture the inode we just bound so cleanup can verify ownership before
+    // unlinking on signal. Without this, killing an orphan daemon (whose path
+    // has been re-bound by a newer one) would unlink the live daemon's file.
+    let our_inode = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            fs::metadata(sock_path).ok().map(|m| m.ino())
+        }
+        #[cfg(windows)]
+        {
+            None
+        }
+    };
+    setup_daemon_signals(sock_path.to_path_buf(), our_inode);
 
     for conn in listener.incoming() {
         match conn {
