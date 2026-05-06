@@ -4,32 +4,30 @@ Containerized Claude Code environments using Docker with sandbox command proxyin
 
 ## sandbox setup
 
-Build and install the sandbox binary to `~/.local/bin/sandbox` if missing or outdated:
+The sandbox binary **must be built with musl as a static binary**. `claude-yolo-automate` bind-mounts the host binary into the container as the proxy shim, so a glibc-linked binary fails to load inside any base image whose libc is older than the host's (`libc.so.6: version GLIBC_2.39 not found`). Static musl removes the dependency entirely.
+
+The default target is locked to `x86_64-unknown-linux-musl` via `ultra-sandbox/sandbox-rs/.cargo/config.toml` — `cargo build` without `--target` already builds musl. Do not bypass this config with an explicit `--target=*-gnu`.
 
 ```bash
-cd ultra-sandbox/sandbox-rs && cargo build --release && install -m 755 target/release/sandbox ~/.local/bin/sandbox
-```
-
-### Static build (for older glibc compatibility)
-
-If you encounter `GLIBC_2.39 not found` errors on older systems, build a static binary using musl:
-
-```bash
-# Install musl target (once)
+# One-time: install the musl target
 rustup target add x86_64-unknown-linux-musl
 
-# Build static binary
+# Build (musl by default) and install
 cd ultra-sandbox/sandbox-rs
-cargo build --release --target x86_64-unknown-linux-musl
-
-# Install the static binary
+cargo build --release
 install -m 755 target/x86_64-unknown-linux-musl/release/sandbox ~/.local/bin/sandbox
 ```
 
-For ARM64 systems:
+For ARM64 hosts, override once and install from the matching path:
 ```bash
 rustup target add aarch64-unknown-linux-musl
 cargo build --release --target aarch64-unknown-linux-musl
+install -m 755 target/aarch64-unknown-linux-musl/release/sandbox ~/.local/bin/sandbox
+```
+
+Verify the result is static (no dynamic libc):
+```bash
+ldd ~/.local/bin/sandbox  # expect: "statically linked"
 ```
 
 Start the daemon on the host before launching any container:

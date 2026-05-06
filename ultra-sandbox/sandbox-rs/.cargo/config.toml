@@ -1,0 +1,10 @@
+# Lock the default build target to musl so `cargo build` produces a statically
+# linked binary that runs inside any container regardless of its libc version.
+# A glibc-linked sandbox binary fails to load inside older base images
+# (`/lib/x86_64-linux-gnu/libc.so.6: version GLIBC_2.39 not found`) because
+# claude-yolo-automate bind-mounts the host binary into the container as the
+# shim — the shim must run on the container's libc, not the host's.
+#
+# For aarch64 hosts, override with: cargo build --release --target aarch64-unknown-linux-musl
+[build]
+target = "x86_64-unknown-linux-musl"
