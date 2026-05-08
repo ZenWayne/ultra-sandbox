@@ -86,10 +86,12 @@ if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
     case " $SANDBOX_MAP_PROCESSES " in
         *" podman "*)
             if [ "$SANDBOX_PODMAN_POLICY" = "build-only" ]; then
-                for verb in build images inspect version info; do
+                for verb in build images inspect version info run exec \
+                            ps logs top stats port diff history events \
+                            search wait exists compose; do
                     sandbox policy allow podman "$verb" >/dev/null
                 done
-                echo "=== podman policy: allow-list = build images inspect version info ==="
+                echo "=== podman policy: allow-list = build images inspect version info run exec ps logs top stats port diff history events search wait exists compose ==="
             fi
             ;;
     esac
@@ -114,7 +116,20 @@ else
     exit 1
 fi
 
-VOLUME_ARGS=(-v "$WORK_DIR:$WORK_DIR")
+# Persist Claude's install across container restarts via named volumes so
+# in-container self-updates stick. Two narrow mounts (vs. all of ~/.local):
+#   share/claude/   — versioned binaries (versions/<v>/...)
+#   bin/            — the 'claude' symlink the auto-updater repoints
+# The image's .local/bin/ only contains 'claude' (per claude_code_base.Dockerfile),
+# so the bin volume isn't shadowing anything. On first use the engine seeds each
+# empty volume from the image; subsequent runs reuse the volume.
+CLAUDE_SHARE_VOLUME="${CLAUDE_SHARE_VOLUME:-claude_share}"
+CLAUDE_BIN_VOLUME="${CLAUDE_BIN_VOLUME:-claude_bin}"
+VOLUME_ARGS=(
+    -v "$WORK_DIR:$WORK_DIR"
+    -v "$CLAUDE_SHARE_VOLUME:/home/$USER/.local/share/claude"
+    -v "$CLAUDE_BIN_VOLUME:/home/$USER/.local/bin"
+)
 SANDBOX_VOLUME_ARGS=()
 SANDBOX_ENV_ARGS=()
 if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
@@ -132,6 +147,37 @@ else
     )
 fi
 
+# Prune stale claude versions left behind by the in-container auto-updater.
+# Anything under $CLAUDE_SHARE_VOLUME/versions/ that the bin/claude symlink
+# does not point at is removed. Runs as a one-shot container so it sees the
+# volume contents under the same UID mapping the main container uses. First
+# launch is a no-op (volume gets seeded from the image, single version).
+# Set SKIP_CLAUDE_PRUNE=1 to skip (saves a container cold start each launch).
+if [ -z "$SKIP_CLAUDE_PRUNE" ]; then
+    "$ENGINE" run --rm \
+        "${USER_ARGS[@]}" \
+        -v "$CLAUDE_SHARE_VOLUME:/home/$USER/.local/share/claude" \
+        -v "$CLAUDE_BIN_VOLUME:/home/$USER/.local/bin" \
+        -e HOME="/home/$USER" \
+        --entrypoint /bin/bash \
+        "$IMAGE" \
+        -c 'set -e
+            share="$HOME/.local/share/claude/versions"
+            bin="$HOME/.local/bin/claude"
+            [ -L "$bin" ] || exit 0
+            target=$(readlink -f "$bin") || exit 0
+            [ -d "$target" ] || exit 0
+            current=$(basename "$target")
+            for d in "$share"/*/; do
+                [ -d "$d" ] || continue
+                v=$(basename "$d")
+                if [ "$v" != "$current" ]; then
+                    echo "claude-yolo-automate: pruning stale claude version $v"
+                    rm -rf "$d"
+                fi
+            done' || true
+fi
+
 "$ENGINE" run -it --rm \
     "${USER_ARGS[@]}" \
     --network=host \
@@ -143,7 +189,6 @@ fi
     $([ -d "$HOME/Pictures/screenshot" ] && echo "-v $HOME/Pictures/screenshot:/home/$USER/Pictures/screenshot") \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-    -e DISABLE_AUTOUPDATER=1 \
     -e LANG="$LANG" \
     -e http_proxy="$(replace_proxy "$http_proxy")" \
     -e https_proxy="$(replace_proxy "$https_proxy")" \
