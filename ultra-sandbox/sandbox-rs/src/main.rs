@@ -900,8 +900,22 @@ fn handle_pipe(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
         }
     });
 
-    // Read client frames (stdin + signals) on this thread.
+    // Read client frames (stdin + signals) on this thread. A separate watcher
+    // joins the stdout/stderr forwarders (which return only when the child has
+    // closed both pipes, i.e. exited) and then shuts down the read side of the
+    // socket — that wakes the read loop below so we don't sit forever waiting
+    // on a client that has no reason to send FRAME_EOF (e.g. claude spawning a
+    // short-lived `git status`: it never closes the shim's stdin, so without
+    // this nudge the loop would block, the child would zombie, and FRAME_EXIT
+    // would never ship).
     let mut reader = conn;
+    let conn_shutdown = reader.try_clone()?;
+    let pipes_done = thread::spawn(move || {
+        let _ = out_handle.join();
+        let _ = err_handle.join();
+        let _ = conn_shutdown.shutdown(std::net::Shutdown::Read);
+    });
+
     loop {
         match read_frame(&mut reader) {
             Err(_) => break,
@@ -917,8 +931,7 @@ fn handle_pipe(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
     }
     drop(stdin);
 
-    let _ = out_handle.join();
-    let _ = err_handle.join();
+    let _ = pipes_done.join();
     let code = match child.wait() {
         Ok(status) => status.code().unwrap_or(-1),
         Err(_) => 1,
