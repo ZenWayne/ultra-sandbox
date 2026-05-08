@@ -12,11 +12,6 @@
 
 set -e
 
-replace_proxy() {
-    local proxy="$1"
-    echo "${proxy//127.0.0.1:10809/host.docker.internal:10809}"
-}
-
 WORK_DIR=$(pwd)
 export SANDBOX_DIR="${SANDBOX_DIR:-$WORK_DIR/.ultra_sandbox}"
 
@@ -190,10 +185,10 @@ fi
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
     -e LANG="$LANG" \
-    -e http_proxy="$(replace_proxy "$http_proxy")" \
-    -e https_proxy="$(replace_proxy "$https_proxy")" \
-    -e HTTP_PROXY="$(replace_proxy "$HTTP_PROXY")" \
-    -e HTTPS_PROXY="$(replace_proxy "$HTTPS_PROXY")" \
+    -e http_proxy="$http_proxy" \
+    -e https_proxy="$https_proxy" \
+    -e HTTP_PROXY="$HTTP_PROXY" \
+    -e HTTPS_PROXY="$HTTPS_PROXY" \
     -e NO_PROXY="$NO_PROXY" \
     -e no_proxy="$no_proxy" \
     -e TERM=xterm-256color \
