@@ -1019,8 +1019,23 @@ fn handle_pty(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
         }
     });
 
-    // Main loop: read client frames (stdin + resize + signals).
+    // Main loop: read client frames (stdin + resize + signals). A watcher
+    // reaps the child and shuts down the read side of the socket on exit, so
+    // a non-interactive PTY consumer (one that never sends FRAME_EOF) doesn't
+    // strand us here after the child has already terminated. PTY out_handle
+    // EOF isn't a reliable signal — grandchildren can still hold the slave —
+    // so we key off child.wait() instead of pipe EOF.
     let mut reader = conn;
+    let conn_shutdown = reader.try_clone()?;
+    let exit_code_handle = thread::spawn(move || {
+        let code = match child.wait() {
+            Ok(status) => status.exit_code() as i32,
+            Err(_) => 1,
+        };
+        let _ = conn_shutdown.shutdown(std::net::Shutdown::Read);
+        code
+    });
+
     loop {
         match read_frame(&mut reader) {
             Err(_) => break,
@@ -1045,16 +1060,13 @@ fn handle_pty(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
         }
     }
 
-    let code = match child.wait() {
-        Ok(status) => status.exit_code() as i32,
-        Err(_) => 1,
-    };
     // Drop master fds so the reader thread wakes up with EOF even if the
     // child still had live grandchildren holding the slave.
     drop(master_writer);
     drop(pair.master);
     let _ = out_handle.join();
 
+    let code = exit_code_handle.join().unwrap_or(1);
     let _ = write_frame_locked(&writer, FRAME_EXIT, &encode_exit(code));
     Ok(())
 }
