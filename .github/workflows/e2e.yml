@@ -74,8 +74,9 @@ jobs:
           # Launcher mounts ~/.ssh (ro), ~/.claude (rw), ~/.claude.json (rw).
           # Docker auto-creates missing host paths as DIRECTORIES, which would
           # break the file mount on .claude.json. Pre-create explicitly.
+          # Write {} not touch — claude rejects empty file as malformed JSON.
           mkdir -p "$HOME/.ssh" "$HOME/.claude"
-          touch "$HOME/.claude.json"
+          echo '{}' > "$HOME/.claude.json"
 
       # ============== STEP 2: run claude-yolo-automate =======================
       - name: Run claude-yolo-automate, ask Claude to invoke proxied python3
