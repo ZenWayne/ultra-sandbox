@@ -40,11 +40,15 @@ function Die($msg)  { Write-Host "[err] $msg" -ForegroundColor Red; exit 1 }
 # Download URL to DEST atomically — works even if DEST is a running binary.
 function Fetch($url, $dest) {
     $tmp = "$dest.new.$PID"
+    $oldPref = $ProgressPreference
     try {
+        $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
     } catch {
         if (Test-Path $tmp) { Remove-Item -Force $tmp }
         Die "download failed: $url — $($_.Exception.Message)"
+    } finally {
+        $ProgressPreference = $oldPref
     }
     Move-Item -Force $tmp $dest
 }
@@ -82,9 +86,12 @@ function Install-Sandbox {
     $url   = Get-ReleaseUrl $asset
     $dest  = Join-Path $InstallDir 'sandbox.exe'
 
-    Log "Downloading $asset from $url"
+    Log "Downloading $asset"
+    Write-Host "      URL:  $url"
+    Write-Host "      Dest: $dest"
     Fetch $url $dest
-    Log "Installed sandbox -> $dest"
+    $size = (Get-Item $dest).Length
+    Log "Installed sandbox.exe ($([math]::Round($size / 1KB)) KB)"
 }
 
 function Build-Image {
@@ -110,7 +117,13 @@ function Build-Image {
 
         # Windows has no unix UID/GID; the container runs inside a Linux VM,
         # whose user is typically uid/gid 1000. Hardcode that as the default.
-        Log "Building image $ImageTag with $engine"
+        Log "Building image '$ImageTag' with $engine"
+        Write-Host "      Engine:    $engine"
+        Write-Host "      User:      $hostUser (UID=1000, GID=1000)"
+        Write-Host "      Dockerfile: claude_code_base.Dockerfile"
+        if ($env:HTTP_PROXY)  { Write-Host "      HTTP_PROXY:  $($env:HTTP_PROXY)" }
+        if ($env:HTTPS_PROXY) { Write-Host "      HTTPS_PROXY: $($env:HTTPS_PROXY)" }
+        Write-Host ""
         Push-Location $tmpdir
         try {
             $buildArgs = @(
@@ -128,6 +141,7 @@ function Build-Image {
         } finally {
             Pop-Location
         }
+        Write-Host ""
         Log "Image built: $ImageTag"
     } finally {
         Remove-Item -Recurse -Force $tmpdir -ErrorAction SilentlyContinue
@@ -136,28 +150,60 @@ function Build-Image {
 
 function Install-Launcher {
     $dest = Join-Path $InstallDir 'claude-yolo-automate'
-    Log "Fetching claude-yolo-automate -> $dest"
+    Log "Fetching claude-yolo-automate"
+    Write-Host "      URL:  $RawBase/claude-yolo-automate"
+    Write-Host "      Dest: $dest"
     Fetch "$RawBase/claude-yolo-automate" $dest
+    Log "Installed claude-yolo-automate"
     Warn "claude-yolo-automate is a bash script — on native Windows, run it from Git Bash, MSYS2, or WSL2."
 }
 
 function Main {
+    Write-Host ""
+    Write-Host "  Ultra-Sandbox Installer for Windows" -ForegroundColor Cyan
+    Write-Host "  ====================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Repo:        $Repo"
+    Write-Host "  Branch:      $Branch"
+    Write-Host "  Release:     $ReleaseTag"
+    Write-Host "  Install dir: $InstallDir"
+    Write-Host "  Image tag:   $ImageTag"
+    Write-Host ""
+
+    $steps = @()
+    if ($env:SKIP_SANDBOX  -ne '1') { $steps += "1. Download sandbox.exe (from GitHub Release)" }
+    if ($env:SKIP_IMAGE    -ne '1') { $steps += "2. Build Docker image ($ImageTag)" }
+    if ($env:SKIP_LAUNCHER -ne '1') { $steps += "3. Install claude-yolo-automate launcher" }
+
+    Write-Host "  This script will:" -ForegroundColor Yellow
+    foreach ($s in $steps) { Write-Host "    $s" }
+    Write-Host ""
+
+    $answer = Read-Host "  Proceed? [Y/n]"
+    if ($answer -and $answer -notmatch '^[Yy]') {
+        Write-Host "  Aborted." -ForegroundColor Red
+        exit 0
+    }
+    Write-Host ""
+
     Ensure-Dir $InstallDir
 
-    if ($env:SKIP_SANDBOX -ne '1') { Install-Sandbox } else { Log "Skipping sandbox download (SKIP_SANDBOX=1)" }
-    if ($env:SKIP_IMAGE   -ne '1') { Build-Image     } else { Log "Skipping image build (SKIP_IMAGE=1)"     }
-    if ($env:SKIP_LAUNCHER -ne '1') { Install-Launcher } else { Log "Skipping launcher install (SKIP_LAUNCHER=1)" }
+    if ($env:SKIP_SANDBOX  -ne '1') { Log "[1/3] Downloading sandbox binary...";  Install-Sandbox  } else { Log "[1/3] Skipped (SKIP_SANDBOX=1)" }
+    if ($env:SKIP_IMAGE    -ne '1') { Log "[2/3] Building container image...";     Build-Image      } else { Log "[2/3] Skipped (SKIP_IMAGE=1)"   }
+    if ($env:SKIP_LAUNCHER -ne '1') { Log "[3/3] Installing launcher script...";   Install-Launcher } else { Log "[3/3] Skipped (SKIP_LAUNCHER=1)" }
 
     Check-Path
 
-    Log "Done."
     Write-Host ""
-    Write-Host "Next steps (from Git Bash / MSYS2 / WSL2):"
-    Write-Host "  cd /path/to/your/project"
-    Write-Host '  SANDBOX_MAP_PROCESSES="python" claude-yolo-automate'
+    Log "All done!"
     Write-Host ""
-    Write-Host "Override mapped commands via SANDBOX_MAP_PROCESSES, e.g.:"
-    Write-Host '  SANDBOX_MAP_PROCESSES="python npx" claude-yolo-automate'
+    Write-Host "  Next steps (from Git Bash / MSYS2 / WSL2):" -ForegroundColor Green
+    Write-Host "    cd /path/to/your/project"
+    Write-Host '    SANDBOX_MAP_PROCESSES="python" claude-yolo-automate'
+    Write-Host ""
+    Write-Host "  Override mapped commands via SANDBOX_MAP_PROCESSES, e.g.:"
+    Write-Host '    SANDBOX_MAP_PROCESSES="python npx" claude-yolo-automate'
+    Write-Host ""
 }
 
 Main

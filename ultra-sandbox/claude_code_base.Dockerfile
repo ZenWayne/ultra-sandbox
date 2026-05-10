@@ -42,6 +42,7 @@ RUN if getent group ${HOST_USER_GID} > /dev/null 2>&1; then \
 RUN mkdir -p /workspace && chown ${HOST_USER_NAME}:${HOST_USER_GID} /workspace
 
 USER ${HOST_USER_NAME}
+ENV HOME="/home/${HOST_USER_NAME}"
 ENV PATH="/home/${HOST_USER_NAME}/.local/bin:${PATH}"
 
 # Install Claude Code (native binary into ~/.local/bin)
