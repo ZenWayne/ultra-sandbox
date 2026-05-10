@@ -28,10 +28,10 @@ jobs:
       - name: Install Docker via colima (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install --quiet colima docker
-          # Force --vm-type=qemu — colima's default `vz` driver (Apple
-          # Virtualization Framework) fails on GH macos-15-arm64 runners;
-          # qemu is slower but actually starts. See colima#1278.
+          # `qemu` is needed because colima's default `vz` driver (Apple
+          # Virtualization Framework) fails to start the hostagent on GH
+          # macos-15-arm64 runners. qemu is slower but actually boots.
+          brew install --quiet colima docker qemu
           colima start --vm-type=qemu --cpu 2 --memory 4 --disk 14
           docker version
 
@@ -44,15 +44,42 @@ jobs:
           REPO="${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
             bash install.sh
 
+      - name: Detect container engine
+        # install.sh prefers podman over docker (GH ubuntu-24.04 ships both,
+        # so podman wins there; macos-via-colima only has docker). The verify
+        # and proxy-test steps below must use the same engine — and on podman
+        # local images get a `localhost/` registry prefix, hence two outputs.
+        id: engine
+        run: |
+          set -euxo pipefail
+          if command -v podman >/dev/null 2>&1; then
+            echo "engine=podman" >> "$GITHUB_OUTPUT"
+            echo "image=localhost/claude_code_base:latest" >> "$GITHUB_OUTPUT"
+            echo "image_repo=localhost/claude_code_base" >> "$GITHUB_OUTPUT"
+            echo "user_args=--userns=keep-id" >> "$GITHUB_OUTPUT"
+          else
+            echo "engine=docker" >> "$GITHUB_OUTPUT"
+            echo "image=claude_code_base:latest" >> "$GITHUB_OUTPUT"
+            echo "image_repo=claude_code_base" >> "$GITHUB_OUTPUT"
+            echo "user_args=--user $(id -u):$(id -g)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Verify install artifacts exist
+        env:
+          ENGINE: ${{ steps.engine.outputs.engine }}
+          IMAGE_REPO: ${{ steps.engine.outputs.image_repo }}
         run: |
           set -euxo pipefail
           test -x "$HOME/.local/bin/sandbox"              || { echo "FAIL: sandbox not installed"; exit 1; }
           test -x "$HOME/.local/bin/claude-yolo-automate" || { echo "FAIL: launcher not installed"; exit 1; }
-          docker images --format '{{.Repository}}' | grep -qx claude_code_base \
-            || { echo "FAIL: image not built"; exit 1; }
+          "$ENGINE" images --format '{{.Repository}}' | grep -qx "$IMAGE_REPO" \
+            || { echo "FAIL: image not built (expected $IMAGE_REPO via $ENGINE)"; "$ENGINE" images; exit 1; }
 
       - name: End-to-end proxy test (container python3 -> host python3)
+        env:
+          ENGINE: ${{ steps.engine.outputs.engine }}
+          IMAGE: ${{ steps.engine.outputs.image }}
+          USER_ARGS: ${{ steps.engine.outputs.user_args }}
         run: |
           set -euxo pipefail
           export PATH="$HOME/.local/bin:$PATH"
@@ -75,7 +102,7 @@ jobs:
 
           # 3. Negative control — confirm the image has NO python3 of its own.
           # If this fails, the positive test below would be ambiguous.
-          if docker run --rm --entrypoint sh claude_code_base:latest \
+          if "$ENGINE" run --rm --entrypoint sh "$IMAGE" \
                 -c 'command -v python3' >/tmp/container_py.txt 2>&1; then
             echo "WARN: image unexpectedly contains python3:"
             cat /tmp/container_py.txt
@@ -87,16 +114,16 @@ jobs:
           # Note: --network=host on macOS docker (colima/Desktop) does NOT
           # bridge to mac host, but the proxy uses a Unix socket bind-mounted
           # via SANDBOX_DIR — no host network needed for this test.
-          docker run --rm \
+          "$ENGINE" run --rm \
             --network=host \
-            --user "$(id -u):$(id -g)" \
+            $USER_ARGS \
             -v "$SANDBOX_DIR:/ultra_sandbox" \
             -v "$HOME/.local/bin/sandbox:/usr/local/bin/sandbox:ro" \
             -e SANDBOX_DIR=/ultra_sandbox \
             -e PATH=/ultra_sandbox/bin:/usr/local/bin:/usr/bin:/bin \
             -e HOME=/tmp \
             --entrypoint /ultra_sandbox/bin/python3 \
-            claude_code_base:latest \
+            "$IMAGE" \
             --version > /tmp/proxied.txt 2>&1
 
           PROXIED="$(tr -d '\r' < /tmp/proxied.txt)"
