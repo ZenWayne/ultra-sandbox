@@ -10,187 +10,20 @@ permissions:
   contents: read
 
 jobs:
-  # Job 1: install.sh -> daemon -> shim -> host command, no Claude in the loop.
-  # Always runs. Asserts the proxy mechanism returns the host's python version.
-  proxy-mechanism:
-    name: install -> proxy works (no Claude) - ${{ matrix.os }}
+  e2e:
+    name: install + claude-yolo-automate - ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-13]
     runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # Build sandbox locally on macOS Intel — until a release is cut that
-      # includes sandbox-darwin-x86_64, install.sh's release-fetch path 404s.
-      # Pair with SKIP_SANDBOX=1 below. Once a tag is pushed and the new
-      # build.yml matrix entry publishes the asset, this whole step + the
-      # SKIP_SANDBOX=1 export can be removed and install.sh will Just Work.
-      - name: Build sandbox from source (macOS Intel)
-        if: matrix.os == 'macos-13'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin
-
-      - name: cargo build sandbox + install (macOS Intel)
-        if: matrix.os == 'macos-13'
-        working-directory: ultra-sandbox/sandbox-rs
-        # .cargo/config.toml locks the default target to musl (for Linux);
-        # explicit --target overrides it for the macOS native build.
-        run: |
-          set -euxo pipefail
-          cargo build --release --target x86_64-apple-darwin
-          mkdir -p "$HOME/.local/bin"
-          install -m 755 target/x86_64-apple-darwin/release/sandbox "$HOME/.local/bin/sandbox"
-
-      - name: Install Docker (macOS Intel)
-        if: matrix.os == 'macos-13'
-        # macos-13 (Intel) has VT-x and HVF acceleration works, so this
-        # action's lima/qemu setup actually boots — unlike macos-15-arm64
-        # where GitHub doesn't expose nested virtualization.
-        uses: crazy-max/ghaction-setup-docker@v4
-        with:
-          version: latest
-
-      - name: Run install.sh from this checkout
-        # REPO/BRANCH overrides make install.sh fetch the Dockerfile + launcher
-        # from this PR's commit instead of main, so PRs validate their own code.
-        # SKIP_SANDBOX=1 on macOS — we just built the binary above.
-        run: |
-          set -euxo pipefail
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            export SKIP_SANDBOX=1
-          fi
-          BRANCH="${{ github.event.pull_request.head.sha || github.sha }}" \
-          REPO="${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
-            bash install.sh
-
-      - name: Detect container engine
-        # install.sh prefers podman over docker (GH ubuntu-24.04 ships both,
-        # so podman wins there; macos-via-colima only has docker). The verify
-        # and proxy-test steps below must use the same engine — and on podman
-        # local images get a `localhost/` registry prefix, hence two outputs.
-        id: engine
-        run: |
-          set -euxo pipefail
-          if command -v podman >/dev/null 2>&1; then
-            echo "engine=podman" >> "$GITHUB_OUTPUT"
-            echo "image=localhost/claude_code_base:latest" >> "$GITHUB_OUTPUT"
-            echo "image_repo=localhost/claude_code_base" >> "$GITHUB_OUTPUT"
-            echo "user_args=--userns=keep-id" >> "$GITHUB_OUTPUT"
-          else
-            echo "engine=docker" >> "$GITHUB_OUTPUT"
-            echo "image=claude_code_base:latest" >> "$GITHUB_OUTPUT"
-            echo "image_repo=claude_code_base" >> "$GITHUB_OUTPUT"
-            echo "user_args=--user $(id -u):$(id -g)" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Verify install artifacts exist
-        env:
-          ENGINE: ${{ steps.engine.outputs.engine }}
-          IMAGE_REPO: ${{ steps.engine.outputs.image_repo }}
-        run: |
-          set -euxo pipefail
-          test -x "$HOME/.local/bin/sandbox"              || { echo "FAIL: sandbox not installed"; exit 1; }
-          test -x "$HOME/.local/bin/claude-yolo-automate" || { echo "FAIL: launcher not installed"; exit 1; }
-          "$ENGINE" images --format '{{.Repository}}' | grep -qx "$IMAGE_REPO" \
-            || { echo "FAIL: image not built (expected $IMAGE_REPO via $ENGINE)"; "$ENGINE" images; exit 1; }
-
-      - name: End-to-end proxy test (container python3 -> host python3)
-        env:
-          ENGINE: ${{ steps.engine.outputs.engine }}
-          IMAGE: ${{ steps.engine.outputs.image }}
-          USER_ARGS: ${{ steps.engine.outputs.user_args }}
-        run: |
-          set -euxo pipefail
-          export PATH="$HOME/.local/bin:$PATH"
-          export SANDBOX_DIR="$RUNNER_TEMP/ultra_sandbox"
-          mkdir -p "$SANDBOX_DIR/bin"
-
-          # 1. Start the daemon, wait until it answers daemon-check
-          sandbox daemon &
-          DAEMON_PID=$!
-          trap 'kill $DAEMON_PID 2>/dev/null || true' EXIT
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
-            sleep 0.3
-            sandbox daemon-check >/dev/null 2>&1 && break
-          done
-          sandbox daemon-check || { echo "FAIL: daemon did not come up"; exit 1; }
-
-          # 2. Stage the sandbox binary inside SANDBOX_DIR/bin so the shims
-          # `sandbox map` creates (relative symlinks pointing at "sandbox")
-          # actually resolve. Mirrors what claude-yolo-automate does.
-          install -m 755 "$(command -v sandbox)" "$SANDBOX_DIR/bin/sandbox"
-
-          # 3. Map host python3 — daemon resolves it on host PATH
-          sandbox map python3
-          test -x "$SANDBOX_DIR/bin/python3" || { echo "FAIL: shim not created"; exit 1; }
-
-          # 4. Negative control — confirm the image has NO python3 of its own.
-          # If this fails, the positive test below would be ambiguous.
-          if "$ENGINE" run --rm --entrypoint sh "$IMAGE" \
-                -c 'command -v python3' >/tmp/container_py.txt 2>&1; then
-            echo "WARN: image unexpectedly contains python3:"
-            cat /tmp/container_py.txt
-          else
-            echo "OK: image has no python3 — proxy is the only path that can answer"
-          fi
-
-          # 5. Run the shim from inside the image and capture its output.
-          # Note: --network=host on macOS docker (colima/Desktop) does NOT
-          # bridge to mac host, but the proxy uses a Unix socket bind-mounted
-          # via SANDBOX_DIR — no host network needed for this test.
-          # Capture exit code separately so we can dump output on failure
-          # (set -e would otherwise eat the diagnostic).
-          set +e
-          "$ENGINE" run --rm \
-            --network=host \
-            $USER_ARGS \
-            -v "$SANDBOX_DIR:/ultra_sandbox" \
-            -v "$HOME/.local/bin/sandbox:/usr/local/bin/sandbox:ro" \
-            -e SANDBOX_DIR=/ultra_sandbox \
-            -e PATH=/ultra_sandbox/bin:/usr/local/bin:/usr/bin:/bin \
-            -e HOME=/tmp \
-            --entrypoint /ultra_sandbox/bin/python3 \
-            "$IMAGE" \
-            --version > /tmp/proxied.txt 2>&1
-          RC=$?
-          set -e
-          if [ $RC -ne 0 ]; then
-            echo "FAIL: container exited $RC"
-            echo "----- container output -----"
-            cat /tmp/proxied.txt
-            echo "----- shim symlink -----"
-            ls -la "$SANDBOX_DIR/bin/"
-            echo "----- staged sandbox file -----"
-            file "$SANDBOX_DIR/bin/sandbox" 2>/dev/null || true
-            exit 1
-          fi
-
-          PROXIED="$(tr -d '\r' < /tmp/proxied.txt)"
-          HOST="$(python3 --version 2>&1 | tr -d '\r')"
-          echo "host:    $HOST"
-          echo "proxied: $PROXIED"
-          [ "$PROXIED" = "$HOST" ] \
-            || { echo "FAIL: proxy output != host python version"; exit 1; }
-          echo "PASS: container's python3 was transparently executed on the host"
-
-  # Job 2: full chain including Claude. Headless: claude -p "...".
-  # Skipped automatically when ANTHROPIC_API_KEY is not configured (e.g. forks).
-  claude-e2e:
-    name: install -> Claude runs python --version through proxy - ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-13]
-    runs-on: ${{ matrix.os }}
-    needs: proxy-mechanism
     # Forks can't read secrets; only run on same-repo events
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
 
+      # macOS Intel: until the next release publishes sandbox-darwin-x86_64,
+      # build it inline and pair with SKIP_SANDBOX=1 in the install step below.
       - name: Build sandbox from source (macOS Intel)
         if: matrix.os == 'macos-13'
         uses: dtolnay/rust-toolchain@stable
@@ -208,6 +41,7 @@ jobs:
 
       - name: Install Docker (macOS Intel)
         if: matrix.os == 'macos-13'
+        # Intel macOS supports HVF; lima/qemu boots correctly here.
         uses: crazy-max/ghaction-setup-docker@v4
         with:
           version: latest
@@ -221,36 +55,33 @@ jobs:
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::ANTHROPIC_API_KEY not set — skipping Claude end-to-end test"
+            echo "::warning::ANTHROPIC_API_KEY not set — Claude end-to-end test cannot run"
           fi
 
-      - name: Install
-        if: steps.key.outputs.available == 'true'
+      # ============== STEP 1: run install.sh =================================
+      - name: Run install.sh
         run: |
           set -euxo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
-            export SKIP_SANDBOX=1
+            export SKIP_SANDBOX=1   # binary already built+installed above
           fi
           BRANCH="${{ github.event.pull_request.head.sha || github.sha }}" \
           REPO="${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
             bash install.sh
 
-      - name: Stage host paths the launcher mounts
-        if: steps.key.outputs.available == 'true'
+      - name: Stage host paths the launcher bind-mounts
         run: |
-          # Launcher does `-v ~/.ssh:...:ro`, `-v ~/.claude:...`, `-v ~/.claude.json:...`.
+          # Launcher mounts ~/.ssh (ro), ~/.claude (rw), ~/.claude.json (rw).
           # Docker auto-creates missing host paths as DIRECTORIES, which would
-          # break the `~/.claude.json` mount that expects a file. Pre-create.
+          # break the file mount on .claude.json. Pre-create explicitly.
           mkdir -p "$HOME/.ssh" "$HOME/.claude"
           touch "$HOME/.claude.json"
 
-      - name: Run claude-yolo-automate, headless, with python proxied
+      # ============== STEP 2: run claude-yolo-automate =======================
+      - name: Run claude-yolo-automate, ask Claude to invoke proxied python3
         if: steps.key.outputs.available == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Optional: when targeting an Anthropic-compatible proxy (DeepSeek,
-          # Kimi, Moonshot, …) set BASE_URL + MODEL as repo secrets too.
-          # Real Anthropic users can leave both unset.
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
           SANDBOX_MAP_PROCESSES: python3
@@ -258,12 +89,18 @@ jobs:
           set -euxo pipefail
           export PATH="$HOME/.local/bin:$PATH"
 
-          # Launcher hardcodes `docker run -it` — needs a PTY. CI has none, so
-          # wrap with `script` to allocate one. `script` syntax differs between
-          # util-linux (Linux runners) and BSD (macOS runners):
-          #   Linux: script -qec "<cmd>" <file>
-          #   BSD:   script -q <file> <argv...>
-          # `claude -p "..."` is headless mode; the launcher passes "$@" through.
+          # Run from a clean working directory so SANDBOX_DIR=$WORK_DIR/.ultra_sandbox
+          # lives somewhere predictable and the launcher's same-path WORK_DIR mount
+          # makes the absolute symlinks created by `sandbox map` resolve inside.
+          WORK="$RUNNER_TEMP/proj"
+          mkdir -p "$WORK"
+          cd "$WORK"
+
+          # Launcher hardcodes `docker run -it`; CI has no PTY → wrap with `script`.
+          # Linux util-linux: script -qec "<cmd>" <file>
+          # BSD (macOS):      script -q <file> <argv...>
+          # `claude -p "..." --output-format text` is headless mode; the launcher
+          # passes "$@" through to claude.
           PROMPT='Use the Bash tool to run python3 --version. Reply with ONLY that exact command output line, no preamble, no markdown, no extra words.'
           INNER="claude-yolo-automate -p \"$PROMPT\" --output-format text"
 
@@ -273,15 +110,15 @@ jobs:
             script -qec "$INNER" /dev/null | tee /tmp/claude_raw.txt
           fi
 
-          # Strip ANSI / CR that script and TUIs sometimes inject
+          # Strip ANSI / CR that script + TUIs sometimes inject
           sed -E $'s/\x1B\\[[0-9;]*[A-Za-z]//g; s/\r//g' /tmp/claude_raw.txt > /tmp/claude_out.txt
 
           HOST_VER="$(python3 --version 2>&1)"
-          echo "expecting host version line: $HOST_VER"
+          echo "expecting host python: $HOST_VER"
           if grep -F "$HOST_VER" /tmp/claude_out.txt >/dev/null; then
-            echo "PASS: Claude reported the HOST python version through the sandbox proxy"
+            echo "PASS: claude-yolo-automate -> Claude -> Bash python3 -> proxied to host"
           else
-            echo "FAIL: host python version not found in Claude reply"
+            echo "FAIL: host python version not in Claude reply"
             echo "----- claude output (cleaned) -----"
             cat /tmp/claude_out.txt
             echo "----- claude output (raw) -----"
