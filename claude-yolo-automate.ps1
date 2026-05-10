@@ -10,6 +10,15 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Convert Windows path to Docker-compatible path: C:\Users\foo -> /c/Users/foo
+function To-LinuxPath($p) {
+    if ($p -match '^([A-Za-z]):\\') {
+        $drive = $Matches[1].ToLower()
+        return "/$drive" + ($p.Substring(2) -replace '\\', '/')
+    }
+    return $p -replace '\\', '/'
+}
+
 $WorkDir = (Get-Location).Path
 $User = $env:USERNAME
 $Home_ = $env:USERPROFILE
@@ -112,8 +121,11 @@ $claudeBinVol   = if ($env:CLAUDE_BIN_VOLUME)   { $env:CLAUDE_BIN_VOLUME }   els
 # Container-side home dir
 $cHome = "/home/$User"
 
+$lWorkDir = To-LinuxPath $WorkDir
+$lSandboxDir = To-LinuxPath $SandboxDir
+
 $volumeArgs = @(
-    '-v', "${WorkDir}:${WorkDir}"
+    '-v', "${lWorkDir}:${lWorkDir}"
     '-v', "${claudeShareVol}:${cHome}/.local/share/claude"
     '-v', "${claudeBinVol}:${cHome}/.local/bin"
 )
@@ -122,9 +134,9 @@ $sandboxVolumeArgs = @()
 $sandboxEnvArgs = @()
 
 if ($env:SANDBOX_MAP_PROCESSES) {
-    $sandboxBinPath = (Get-Command sandbox).Source
+    $sandboxBinPath = To-LinuxPath (Get-Command sandbox).Source
     $sandboxVolumeArgs = @(
-        '-v', "${SandboxDir}:/ultra_sandbox"
+        '-v', "${lSandboxDir}:/ultra_sandbox"
         '-v', "${sandboxBinPath}:/usr/local/bin/sandbox:ro"
     )
     $sandboxEnvArgs = @(
@@ -141,19 +153,19 @@ if ($env:SANDBOX_MAP_PROCESSES) {
 $optionalMounts = @()
 $sshDir = Join-Path $Home_ '.ssh'
 if (Test-Path $sshDir) {
-    $optionalMounts += @('-v', "${sshDir}:${cHome}/.ssh:ro")
+    $optionalMounts += @('-v', "$(To-LinuxPath $sshDir):${cHome}/.ssh:ro")
 }
 $claudeDir = Join-Path $Home_ '.claude'
 if (Test-Path $claudeDir) {
-    $optionalMounts += @('-v', "${claudeDir}:${cHome}/.claude")
+    $optionalMounts += @('-v', "$(To-LinuxPath $claudeDir):${cHome}/.claude")
 }
 $claudeJson = Join-Path $Home_ '.claude.json'
 if (Test-Path $claudeJson) {
-    $optionalMounts += @('-v', "${claudeJson}:${cHome}/.claude.json")
+    $optionalMounts += @('-v', "$(To-LinuxPath $claudeJson):${cHome}/.claude.json")
 }
 $screenshotDir = Join-Path $Home_ 'Pictures\screenshot'
 if (Test-Path $screenshotDir) {
-    $optionalMounts += @('-v', "${screenshotDir}:${cHome}/Pictures/screenshot")
+    $optionalMounts += @('-v', "$(To-LinuxPath $screenshotDir):${cHome}/Pictures/screenshot")
 }
 
 # Environment passthrough
@@ -206,7 +218,7 @@ try {
         @optionalMounts `
         @envArgs `
         @sandboxEnvArgs `
-        -w $WorkDir `
+        -w $lWorkDir `
         --entrypoint "${cHome}/.local/bin/claude" `
         $Image `
         --dangerously-skip-permissions @args

@@ -45,8 +45,13 @@ function Die($msg)  { Write-Host "[err] $msg" -ForegroundColor Red; exit 1 }
 # Download URL to DEST atomically — works even if DEST is a running binary.
 function Fetch($url, $dest) {
     $tmp = "$dest.new.$PID"
+    # Honour HTTP_PROXY / HTTPS_PROXY env vars (Invoke-WebRequest ignores them)
+    $proxy = $env:HTTPS_PROXY
+    if (-not $proxy) { $proxy = $env:HTTP_PROXY }
+    $iwrArgs = @{ Uri = $url; OutFile = $tmp; UseBasicParsing = $true }
+    if ($proxy) { $iwrArgs['Proxy'] = $proxy; $iwrArgs['ProxyUseDefaultCredentials'] = $true }
     try {
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+        Invoke-WebRequest @iwrArgs
     } catch {
         if (Test-Path $tmp) { Remove-Item -Force $tmp }
         Die "download failed: $url — $($_.Exception.Message)"
@@ -120,8 +125,7 @@ function Build-Image {
     $tmpdir = Join-Path ([System.IO.Path]::GetTempPath()) ("ultra-sandbox-build-" + [System.Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $tmpdir -Force | Out-Null
     try {
-        Log "Fetching Dockerfile"
-        Fetch "$RawBase/ultra-sandbox/claude_code_base.Dockerfile" (Join-Path $tmpdir 'claude_code_base.Dockerfile')
+        Install-File 'ultra-sandbox/claude_code_base.Dockerfile' (Join-Path $tmpdir 'claude_code_base.Dockerfile')
 
         # Windows has no unix UID/GID; the container runs inside a Linux VM,
         # whose user is typically uid/gid 1000. Hardcode that as the default.
@@ -158,21 +162,25 @@ function Build-Image {
     }
 }
 
+function Install-File($name, $dest) {
+    # Prefer local file next to this script (cloned repo), fall back to GitHub
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    $local = Join-Path $scriptDir ($name -replace '/', '\')
+    if (Test-Path $local) {
+        Log "Copying $name (local)"
+        Copy-Item -Force $local $dest
+    } else {
+        $url = "$RawBase/$name"
+        Log "Downloading $name"
+        Write-Host "      URL: $url"
+        Fetch $url $dest
+    }
+    Write-Host "      -> $dest"
+}
+
 function Install-Launcher {
-    # PowerShell launcher
-    $ps1Dest = Join-Path $InstallDir 'claude-yolo-automate.ps1'
-    Log "Fetching claude-yolo-automate.ps1"
-    Write-Host "      URL:  $RawBase/claude-yolo-automate.ps1"
-    Write-Host "      Dest: $ps1Dest"
-    Fetch "$RawBase/claude-yolo-automate.ps1" $ps1Dest
-
-    # CMD wrapper
-    $cmdDest = Join-Path $InstallDir 'claude-yolo-automate.cmd'
-    Log "Fetching claude-yolo-automate.cmd"
-    Write-Host "      URL:  $RawBase/claude-yolo-automate.cmd"
-    Write-Host "      Dest: $cmdDest"
-    Fetch "$RawBase/claude-yolo-automate.cmd" $cmdDest
-
+    Install-File 'claude-yolo-automate.ps1' (Join-Path $InstallDir 'claude-yolo-automate.ps1')
+    Install-File 'claude-yolo-automate.cmd' (Join-Path $InstallDir 'claude-yolo-automate.cmd')
     Log "Installed claude-yolo-automate (.ps1 + .cmd)"
 }
 
