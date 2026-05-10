@@ -24,6 +24,11 @@
 # install.sh inside WSL2.
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+# Detect piped execution (irm | iex) — stdin is not interactive, skip prompts
+$Piped = -not [Environment]::UserInteractive -or ($Host.Name -eq 'ServerRemoteHost') -or `
+         ($MyInvocation.Line -match 'iex|Invoke-Expression')
 
 $Repo       = if ($env:REPO)        { $env:REPO }        else { 'ZenWayne/ultra-sandbox' }
 $Branch     = if ($env:BRANCH)      { $env:BRANCH }      else { 'main' }
@@ -40,15 +45,11 @@ function Die($msg)  { Write-Host "[err] $msg" -ForegroundColor Red; exit 1 }
 # Download URL to DEST atomically — works even if DEST is a running binary.
 function Fetch($url, $dest) {
     $tmp = "$dest.new.$PID"
-    $oldPref = $ProgressPreference
     try {
-        $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
     } catch {
         if (Test-Path $tmp) { Remove-Item -Force $tmp }
         Die "download failed: $url — $($_.Exception.Message)"
-    } finally {
-        $ProgressPreference = $oldPref
     }
     Move-Item -Force $tmp $dest
 }
@@ -196,10 +197,12 @@ function Main {
     foreach ($s in $steps) { Write-Host "    $s" }
     Write-Host ""
 
-    $answer = Read-Host "  Proceed? [Y/n]"
-    if ($answer -and $answer -notmatch '^[Yy]') {
-        Write-Host "  Aborted." -ForegroundColor Red
-        exit 0
+    if (-not $Piped) {
+        $answer = Read-Host "  Proceed? [Y/n]"
+        if ($answer -and $answer -notmatch '^[Yy]') {
+            Write-Host "  Aborted." -ForegroundColor Red
+            exit 0
+        }
     }
     Write-Host ""
 
