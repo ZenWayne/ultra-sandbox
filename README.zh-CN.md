@@ -106,11 +106,18 @@ powershell -c "irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main
 | `SKIP_SANDBOX` | — | `=1` 跳过二进制下载 |
 | `SKIP_IMAGE` | — | `=1` 跳过镜像构建 |
 | `SKIP_LAUNCHER` | — | `=1` 跳过 launcher 安装 |
+| `APT_MIRROR` | `http://deb.debian.org` | 镜像构建时 Debian apt 源 base URL。国内推荐 `http://mirrors.aliyun.com` 或 `http://mirrors.ustc.edu.cn`,可显著加速 `apt-get install` |
 
 示例——锁定到某个 tag,换自定义安装目录:
 ```bash
 INSTALL_DIR=~/bin BRANCH=v1.0.0 RELEASE_TAG=v1.0.0 \
   curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/v1.0.0/install.sh | bash
+```
+
+示例——国内用户用阿里云镜像加速 `apt-get`:
+```bash
+APT_MIRROR=http://mirrors.aliyun.com \
+  curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.sh | bash
 ```
 
 **从源码构建**(Intel Mac、其他架构,或不想用预编译版本):

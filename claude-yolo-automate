@@ -187,6 +187,7 @@ fi
     $([ -d "$HOME/Pictures/screenshot" ] && echo "-v $HOME/Pictures/screenshot:/home/$USER/Pictures/screenshot") \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+    -e ANTHROPIC_MODEL="$ANTHROPIC_MODEL" \
     -e LANG="$LANG" \
     -e http_proxy="$http_proxy" \
     -e https_proxy="$https_proxy" \

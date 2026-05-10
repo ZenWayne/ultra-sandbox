@@ -1,0 +1,201 @@
+name: end-to-end install + proxy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Job 1: install.sh -> daemon -> shim -> host command, no Claude in the loop.
+  # Always runs. Asserts the proxy mechanism returns the host's python version.
+  proxy-mechanism:
+    name: install -> proxy works (no Claude) - ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # macos-latest no longer ships Docker. Install via colima — the Linux VM
+      # runs the daemon, the docker CLI on the host talks to it. Slow (~3 min)
+      # but the only sane way to test Linux containers on a Mac runner.
+      - name: Install Docker via colima (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install --quiet colima docker
+          colima start --cpu 2 --memory 4 --disk 14
+          docker version
+
+      - name: Run install.sh from this checkout
+        # REPO/BRANCH overrides make install.sh fetch the Dockerfile + launcher
+        # from this PR's commit instead of main, so PRs validate their own code.
+        run: |
+          set -euxo pipefail
+          BRANCH="${{ github.event.pull_request.head.sha || github.sha }}" \
+          REPO="${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
+            bash install.sh
+
+      - name: Verify install artifacts exist
+        run: |
+          set -euxo pipefail
+          test -x "$HOME/.local/bin/sandbox"              || { echo "FAIL: sandbox not installed"; exit 1; }
+          test -x "$HOME/.local/bin/claude-yolo-automate" || { echo "FAIL: launcher not installed"; exit 1; }
+          docker images --format '{{.Repository}}' | grep -qx claude_code_base \
+            || { echo "FAIL: image not built"; exit 1; }
+
+      - name: End-to-end proxy test (container python3 -> host python3)
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          export SANDBOX_DIR="$RUNNER_TEMP/ultra_sandbox"
+          mkdir -p "$SANDBOX_DIR/bin"
+
+          # 1. Start the daemon, wait until it answers daemon-check
+          sandbox daemon &
+          DAEMON_PID=$!
+          trap 'kill $DAEMON_PID 2>/dev/null || true' EXIT
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 0.3
+            sandbox daemon-check >/dev/null 2>&1 && break
+          done
+          sandbox daemon-check || { echo "FAIL: daemon did not come up"; exit 1; }
+
+          # 2. Map host python3 — daemon resolves it on host PATH
+          sandbox map python3
+          test -x "$SANDBOX_DIR/bin/python3" || { echo "FAIL: shim not created"; exit 1; }
+
+          # 3. Negative control — confirm the image has NO python3 of its own.
+          # If this fails, the positive test below would be ambiguous.
+          if docker run --rm --entrypoint sh claude_code_base:latest \
+                -c 'command -v python3' >/tmp/container_py.txt 2>&1; then
+            echo "WARN: image unexpectedly contains python3:"
+            cat /tmp/container_py.txt
+          else
+            echo "OK: image has no python3 — proxy is the only path that can answer"
+          fi
+
+          # 4. Run the shim from inside the image and capture its output.
+          # Note: --network=host on macOS docker (colima/Desktop) does NOT
+          # bridge to mac host, but the proxy uses a Unix socket bind-mounted
+          # via SANDBOX_DIR — no host network needed for this test.
+          docker run --rm \
+            --network=host \
+            --user "$(id -u):$(id -g)" \
+            -v "$SANDBOX_DIR:/ultra_sandbox" \
+            -v "$HOME/.local/bin/sandbox:/usr/local/bin/sandbox:ro" \
+            -e SANDBOX_DIR=/ultra_sandbox \
+            -e PATH=/ultra_sandbox/bin:/usr/local/bin:/usr/bin:/bin \
+            -e HOME=/tmp \
+            --entrypoint /ultra_sandbox/bin/python3 \
+            claude_code_base:latest \
+            --version > /tmp/proxied.txt 2>&1
+
+          PROXIED="$(tr -d '\r' < /tmp/proxied.txt)"
+          HOST="$(python3 --version 2>&1 | tr -d '\r')"
+          echo "host:    $HOST"
+          echo "proxied: $PROXIED"
+          [ "$PROXIED" = "$HOST" ] \
+            || { echo "FAIL: proxy output != host python version"; exit 1; }
+          echo "PASS: container's python3 was transparently executed on the host"
+
+  # Job 2: full chain including Claude. Headless: claude -p "...".
+  # Skipped automatically when ANTHROPIC_API_KEY is not configured (e.g. forks).
+  claude-e2e:
+    name: install -> Claude runs python --version through proxy - ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    needs: proxy-mechanism
+    # Forks can't read secrets; only run on same-repo events
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Docker via colima (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install --quiet colima docker
+          colima start --cpu 2 --memory 4 --disk 14
+          docker version
+
+      - name: Detect API key availability
+        id: key
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANTHROPIC_API_KEY not set — skipping Claude end-to-end test"
+          fi
+
+      - name: Install
+        if: steps.key.outputs.available == 'true'
+        run: |
+          set -euxo pipefail
+          BRANCH="${{ github.event.pull_request.head.sha || github.sha }}" \
+          REPO="${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
+            bash install.sh
+
+      - name: Stage host paths the launcher mounts
+        if: steps.key.outputs.available == 'true'
+        run: |
+          # Launcher does `-v ~/.ssh:...:ro`, `-v ~/.claude:...`, `-v ~/.claude.json:...`.
+          # Docker auto-creates missing host paths as DIRECTORIES, which would
+          # break the `~/.claude.json` mount that expects a file. Pre-create.
+          mkdir -p "$HOME/.ssh" "$HOME/.claude"
+          touch "$HOME/.claude.json"
+
+      - name: Run claude-yolo-automate, headless, with python proxied
+        if: steps.key.outputs.available == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Optional: when targeting an Anthropic-compatible proxy (DeepSeek,
+          # Kimi, Moonshot, …) set BASE_URL + MODEL as repo secrets too.
+          # Real Anthropic users can leave both unset.
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
+          SANDBOX_MAP_PROCESSES: python3
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+
+          # Launcher hardcodes `docker run -it` — needs a PTY. CI has none, so
+          # wrap with `script` to allocate one. `script` syntax differs between
+          # util-linux (Linux runners) and BSD (macOS runners):
+          #   Linux: script -qec "<cmd>" <file>
+          #   BSD:   script -q <file> <argv...>
+          # `claude -p "..."` is headless mode; the launcher passes "$@" through.
+          PROMPT='Use the Bash tool to run python3 --version. Reply with ONLY that exact command output line, no preamble, no markdown, no extra words.'
+          INNER="claude-yolo-automate -p \"$PROMPT\" --output-format text"
+
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            script -q /dev/null bash -c "$INNER" | tee /tmp/claude_raw.txt
+          else
+            script -qec "$INNER" /dev/null | tee /tmp/claude_raw.txt
+          fi
+
+          # Strip ANSI / CR that script and TUIs sometimes inject
+          sed -E $'s/\x1B\\[[0-9;]*[A-Za-z]//g; s/\r//g' /tmp/claude_raw.txt > /tmp/claude_out.txt
+
+          HOST_VER="$(python3 --version 2>&1)"
+          echo "expecting host version line: $HOST_VER"
+          if grep -F "$HOST_VER" /tmp/claude_out.txt >/dev/null; then
+            echo "PASS: Claude reported the HOST python version through the sandbox proxy"
+          else
+            echo "FAIL: host python version not found in Claude reply"
+            echo "----- claude output (cleaned) -----"
+            cat /tmp/claude_out.txt
+            echo "----- claude output (raw) -----"
+            cat /tmp/claude_raw.txt
+            exit 1
+          fi

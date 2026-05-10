@@ -13,6 +13,10 @@ ARG HOST_USER_UID
 ARG HOST_USER_GID
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
+# Override with e.g. http://mirrors.aliyun.com (China) or
+# http://mirrors.ustc.edu.cn — the value is a base URL whose mirror serves
+# both /debian/ and /debian-security/ under the same root.
+ARG APT_MIRROR=http://deb.debian.org
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HTTP_PROXY=${HTTP_PROXY}
@@ -20,11 +24,10 @@ ENV HTTPS_PROXY=${HTTPS_PROXY}
 ENV http_proxy=${HTTP_PROXY}
 ENV https_proxy=${HTTPS_PROXY}
 
-# Use Aliyun mirror for Debian packages
 RUN rm -f /etc/apt/sources.list.d/* && \
-    echo "deb http://mirrors.aliyun.com/debian/ bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian-security/ bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+    echo "deb ${APT_MIRROR}/debian/ bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
+    echo "deb ${APT_MIRROR}/debian-security/ bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
+    echo "deb ${APT_MIRROR}/debian/ bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list
 
 # Minimum deps required by the Claude installer
 RUN apt-get update && apt-get install -y --no-install-recommends \

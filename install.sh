@@ -19,6 +19,9 @@
 #   SKIP_SANDBOX      =1 to skip sandbox binary download
 #   SKIP_IMAGE        =1 to skip image build
 #   SKIP_LAUNCHER     =1 to skip launcher install
+#   APT_MIRROR        Debian apt mirror base URL passed to docker build
+#                     (default: http://deb.debian.org; for China use
+#                     http://mirrors.aliyun.com or http://mirrors.ustc.edu.cn)
 
 set -euo pipefail
 
@@ -138,6 +141,7 @@ build_image() {
             --build-arg HOST_USER_NAME="$host_user" \
             --build-arg HTTP_PROXY="${HTTP_PROXY:-}" \
             --build-arg HTTPS_PROXY="${HTTPS_PROXY:-}" \
+            ${APT_MIRROR:+--build-arg APT_MIRROR="$APT_MIRROR"} \
             -t "$IMAGE_TAG" \
             .
     )
