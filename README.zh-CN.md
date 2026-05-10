@@ -236,7 +236,9 @@ sandbox map <cmd> [--remove]        在 $SANDBOX_DIR/bin/ 创建/移除 shim
 
 **环境变量:** `SANDBOX_DIR`(默认为 `.ultra_sandbox`)同时控制 socket 路径(`$SANDBOX_DIR/daemon.sock`)和 shim 目录(`$SANDBOX_DIR/bin/`)。
 
-**跨平台:** 实现(`ultra-sandbox/sandbox-rs/`)面向 Linux、macOS(x86_64 + arm64)和 Windows(通过 `uds_windows` + ctrlc)。四个平台的 CI 构建在 `.github/workflows/build.yml` 中定义。
+**传输方式:** Linux/macOS 上 daemon 和 client 通过 Unix domain socket 通信(bind-mount 进容器)。Windows 上 Docker Desktop 的容器运行在 Linux 虚拟机内,无法与宿主机共享 Unix socket,因此 daemon 监听 **TCP**(`127.0.0.1:19999`),容器内的 client 通过 `host.docker.internal` 连回宿主机。帧协议完全一致,只有传输层不同。在任意平台上设置 `SANDBOX_TCP=1` 和 `SANDBOX_TCP_ADDR=<host>:<port>` 即可启用 TCP 模式。
+
+**跨平台:** 实现(`ultra-sandbox/sandbox-rs/`)面向 Linux、macOS(x86_64 + arm64)和 Windows。CI 构建在 `.github/workflows/build.yml` 中定义。
 
 ---
 

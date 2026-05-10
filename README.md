@@ -236,7 +236,9 @@ sandbox map <cmd> [--remove]        create/remove a shim in $SANDBOX_DIR/bin/
 
 **Environment:** `SANDBOX_DIR` (default `.ultra_sandbox`) controls both the socket path (`$SANDBOX_DIR/daemon.sock`) and the shim directory (`$SANDBOX_DIR/bin/`).
 
-**Cross-platform:** the implementation (`ultra-sandbox/sandbox-rs/`) targets Linux, macOS (x86_64 + arm64), and Windows (via `uds_windows` + ctrlc). CI builds all four in `.github/workflows/build.yml`.
+**Transport:** On Linux/macOS the daemon and client communicate over a Unix domain socket (bind-mounted into the container). On Windows, Docker Desktop runs containers inside a Linux VM that cannot share Unix sockets with the host, so the daemon listens on **TCP** (`127.0.0.1:19999` by default) and the container client connects back via `host.docker.internal`. The frame protocol is identical — only the transport layer differs. Set `SANDBOX_TCP=1` and `SANDBOX_TCP_ADDR=<host>:<port>` to use TCP on any platform.
+
+**Cross-platform:** the implementation (`ultra-sandbox/sandbox-rs/`) targets Linux, macOS (x86_64 + arm64), and Windows. CI builds all three in `.github/workflows/build.yml`.
 
 ---
 
