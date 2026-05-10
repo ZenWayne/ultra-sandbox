@@ -74,11 +74,18 @@ function Ensure-Dir($path) {
     }
 }
 
-function Check-Path {
-    $paths = ($env:Path -split ';') | Where-Object { $_ }
-    if ($paths -contains $InstallDir) { return }
-    Warn "$InstallDir is not on `$env:Path — add it to your user PATH:"
-    Warn "  [Environment]::SetEnvironmentVariable('Path', `"`$env:Path;$InstallDir`", 'User')"
+function Ensure-Path {
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries = ($userPath -split ';') | Where-Object { $_ }
+    if ($entries -contains $InstallDir) {
+        Log "$InstallDir is already on user PATH"
+        return
+    }
+    Log "Adding $InstallDir to user PATH..."
+    $newPath = ($userPath.TrimEnd(';') + ";$InstallDir").TrimStart(';')
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    $env:Path = "$env:Path;$InstallDir"
+    Log "Done. New terminal sessions will pick it up automatically."
 }
 
 function Install-Sandbox {
@@ -151,13 +158,21 @@ function Build-Image {
 }
 
 function Install-Launcher {
-    $dest = Join-Path $InstallDir 'claude-yolo-automate'
-    Log "Fetching claude-yolo-automate"
-    Write-Host "      URL:  $RawBase/claude-yolo-automate"
-    Write-Host "      Dest: $dest"
-    Fetch "$RawBase/claude-yolo-automate" $dest
-    Log "Installed claude-yolo-automate"
-    Warn "claude-yolo-automate is a bash script — on native Windows, run it from Git Bash, MSYS2, or WSL2."
+    # PowerShell launcher
+    $ps1Dest = Join-Path $InstallDir 'claude-yolo-automate.ps1'
+    Log "Fetching claude-yolo-automate.ps1"
+    Write-Host "      URL:  $RawBase/claude-yolo-automate.ps1"
+    Write-Host "      Dest: $ps1Dest"
+    Fetch "$RawBase/claude-yolo-automate.ps1" $ps1Dest
+
+    # CMD wrapper
+    $cmdDest = Join-Path $InstallDir 'claude-yolo-automate.cmd'
+    Log "Fetching claude-yolo-automate.cmd"
+    Write-Host "      URL:  $RawBase/claude-yolo-automate.cmd"
+    Write-Host "      Dest: $cmdDest"
+    Fetch "$RawBase/claude-yolo-automate.cmd" $cmdDest
+
+    Log "Installed claude-yolo-automate (.ps1 + .cmd)"
 }
 
 function Main {
@@ -194,17 +209,20 @@ function Main {
     if ($env:SKIP_IMAGE    -ne '1') { Log "[2/3] Building container image...";     Build-Image      } else { Log "[2/3] Skipped (SKIP_IMAGE=1)"   }
     if ($env:SKIP_LAUNCHER -ne '1') { Log "[3/3] Installing launcher script...";   Install-Launcher } else { Log "[3/3] Skipped (SKIP_LAUNCHER=1)" }
 
-    Check-Path
+    Ensure-Path
 
     Write-Host ""
     Log "All done!"
     Write-Host ""
-    Write-Host "  Next steps (from Git Bash / MSYS2 / WSL2):" -ForegroundColor Green
-    Write-Host "    cd /path/to/your/project"
-    Write-Host '    SANDBOX_MAP_PROCESSES="python" claude-yolo-automate'
+    Write-Host "  Next steps:" -ForegroundColor Green
+    Write-Host "    cd C:\path\to\your\project"
+    Write-Host '    claude-yolo-automate'
     Write-Host ""
-    Write-Host "  Override mapped commands via SANDBOX_MAP_PROCESSES, e.g.:"
-    Write-Host '    SANDBOX_MAP_PROCESSES="python npx" claude-yolo-automate'
+    Write-Host "  With command mapping:" -ForegroundColor Green
+    Write-Host '    set SANDBOX_MAP_PROCESSES=python docker && claude-yolo-automate'
+    Write-Host ""
+    Write-Host "  To uninstall:"
+    Write-Host "    irm https://raw.githubusercontent.com/$Repo/$Branch/uninstall.ps1 | iex"
     Write-Host ""
 }
 
