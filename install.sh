@@ -64,7 +64,8 @@ detect_asset() {
         Darwin)
             case "$arch" in
                 arm64|aarch64) echo "sandbox-darwin-arm64" ;;
-                *) err "unsupported macOS arch: $arch (Intel macs must build from source)" ;;
+                x86_64) echo "sandbox-darwin-x86_64" ;;
+                *) err "unsupported macOS arch: $arch" ;;
             esac ;;
         MINGW*|MSYS*|CYGWIN*) echo "sandbox-windows-x86_64.exe" ;;
         *) err "unsupported OS: $os" ;;
