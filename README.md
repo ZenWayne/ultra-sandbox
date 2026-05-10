@@ -81,9 +81,14 @@ One-liner — no clone needed. The installer fetches the `sandbox` release, down
 curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.sh | bash
 ```
 
-**Windows (native, PowerShell):**
+**Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.ps1 | iex
+```
+
+**Windows (CMD):**
+```cmd
+powershell -c "irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.ps1 | iex"
 ```
 
 > `claude-yolo-automate` is a bash script. On native Windows, run it from Git Bash, MSYS2, or WSL2 — or just use `install.sh` inside WSL2 for a fully-bash flow.

@@ -39,7 +39,8 @@ RUN if getent group ${HOST_USER_GID} > /dev/null 2>&1; then \
         useradd --uid ${HOST_USER_UID} --gid ${HOST_USER_GID} -m -s /bin/bash ${HOST_USER_NAME}; \
     fi
 
-RUN mkdir -p /workspace && chown ${HOST_USER_NAME}:${HOST_USER_GID} /workspace
+RUN mkdir -p /workspace && chown ${HOST_USER_NAME}:${HOST_USER_GID} /workspace \
+    && chown -R ${HOST_USER_NAME}:${HOST_USER_GID} /home/${HOST_USER_NAME}
 
 USER ${HOST_USER_NAME}
 ENV HOME="/home/${HOST_USER_NAME}"

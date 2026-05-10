@@ -81,9 +81,14 @@ Ultra-sandbox 是一套轻量的命令代理系统：宿主机上运行一个微
 curl -fsSL https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.sh | bash
 ```
 
-**Windows(原生,PowerShell):**
+**Windows（PowerShell）:**
 ```powershell
 irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.ps1 | iex
+```
+
+**Windows（CMD）:**
+```cmd
+powershell -c "irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main/install.ps1 | iex"
 ```
 
 > `claude-yolo-automate` 是 bash 脚本。在原生 Windows 上要通过 Git Bash、MSYS2 或 WSL2 运行——或者直接在 WSL2 里用 `install.sh` 获得纯 bash 流程。
