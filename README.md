@@ -313,4 +313,4 @@ Pencil's MCP binary lives under `/tmp/.mount_Pencil<random>/`, and the random su
 
 ## License
 
-See `LICENSE`.
+Apache License 2.0. See [LICENSE](LICENSE).

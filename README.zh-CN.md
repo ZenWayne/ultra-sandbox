@@ -314,4 +314,4 @@ Pencil 的 MCP 二进制位于 `/tmp/.mount_Pencil<随机串>/`,随机后缀每�
 
 ## 许可证
 
-见 `LICENSE`。
+Apache License 2.0。见 [LICENSE](LICENSE)。
