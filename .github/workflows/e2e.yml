@@ -29,7 +29,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install --quiet colima docker
-          colima start --cpu 2 --memory 4 --disk 14
+          # Force --vm-type=qemu — colima's default `vz` driver (Apple
+          # Virtualization Framework) fails on GH macos-15-arm64 runners;
+          # qemu is slower but actually starts. See colima#1278.
+          colima start --vm-type=qemu --cpu 2 --memory 4 --disk 14
           docker version
 
       - name: Run install.sh from this checkout
@@ -123,7 +126,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install --quiet colima docker
-          colima start --cpu 2 --memory 4 --disk 14
+          # Force --vm-type=qemu — colima's default `vz` driver (Apple
+          # Virtualization Framework) fails on GH macos-15-arm64 runners;
+          # qemu is slower but actually starts. See colima#1278.
+          colima start --vm-type=qemu --cpu 2 --memory 4 --disk 14
           docker version
 
       - name: Detect API key availability

@@ -123,7 +123,10 @@ build_image() {
 
     local tmpdir
     tmpdir="$(mktemp -d)"
-    trap 'rm -rf "$tmpdir"' RETURN
+    # Self-clearing RETURN trap — bash RETURN traps are global by default, so
+    # without `trap - RETURN` this fires again on every later function return
+    # (install_launcher, …) where $tmpdir is out of scope and `set -u` aborts.
+    trap 'rm -rf "$tmpdir"; trap - RETURN' RETURN
 
     log "Fetching Dockerfile"
     fetch "$RAW_BASE/ultra-sandbox/claude_code_base.Dockerfile" "$tmpdir/claude_code_base.Dockerfile"
