@@ -12,6 +12,9 @@
 
 set -e
 
+# Ensure USER is set (Git Bash / MSYS2 on Windows may only set USERNAME)
+export USER="${USER:-${USERNAME:-$(whoami)}}"
+
 WORK_DIR=$(pwd)
 export SANDBOX_DIR="${SANDBOX_DIR:-$WORK_DIR/.ultra_sandbox}"
 
