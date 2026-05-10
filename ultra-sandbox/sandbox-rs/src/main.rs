@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::symlink as unix_symlink;
 #[cfg(unix)]
@@ -93,9 +94,72 @@ fn encode_exit(code: i32) -> [u8; 4] {
     (code as u32).to_be_bytes()
 }
 
+// ---------------------------------------------------------------------------
+// Transport: thin wrapper around UDS or TCP
+// ---------------------------------------------------------------------------
+
+enum Transport {
+    Unix(UnixStream),
+    Tcp(TcpStream),
+}
+
+impl Transport {
+    fn try_clone(&self) -> io::Result<Transport> {
+        match self {
+            Transport::Unix(s) => s.try_clone().map(Transport::Unix),
+            Transport::Tcp(s) => s.try_clone().map(Transport::Tcp),
+        }
+    }
+
+    fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
+        match self {
+            Transport::Unix(s) => s.shutdown(how),
+            Transport::Tcp(s) => s.shutdown(how),
+        }
+    }
+
+    fn set_read_timeout(&self, dur: Option<std::time::Duration>) -> io::Result<()> {
+        match self {
+            Transport::Unix(s) => s.set_read_timeout(dur),
+            Transport::Tcp(s) => s.set_read_timeout(dur),
+        }
+    }
+
+    fn set_write_timeout(&self, dur: Option<std::time::Duration>) -> io::Result<()> {
+        match self {
+            Transport::Unix(s) => s.set_write_timeout(dur),
+            Transport::Tcp(s) => s.set_write_timeout(dur),
+        }
+    }
+}
+
+impl io::Read for Transport {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Transport::Unix(s) => s.read(buf),
+            Transport::Tcp(s) => s.read(buf),
+        }
+    }
+}
+
+impl io::Write for Transport {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Transport::Unix(s) => s.write(buf),
+            Transport::Tcp(s) => s.write(buf),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Transport::Unix(s) => s.flush(),
+            Transport::Tcp(s) => s.flush(),
+        }
+    }
+}
+
 // Shared writer helper: every producer thread locks before writing a frame so
 // that frame boundaries cannot interleave on the wire.
-type SharedWriter = Arc<Mutex<UnixStream>>;
+type SharedWriter = Arc<Mutex<Transport>>;
 
 fn write_frame_locked(w: &SharedWriter, ftype: u8, data: &[u8]) -> io::Result<()> {
     let mut guard = w.lock().expect("shared writer mutex poisoned");
@@ -119,6 +183,18 @@ fn sandbox_dir() -> PathBuf {
 
 fn socket_path() -> PathBuf {
     sandbox_dir().join("daemon.sock")
+}
+
+fn tcp_mode() -> bool {
+    #[cfg(windows)]
+    { true }
+    #[cfg(unix)]
+    { env::var("SANDBOX_TCP").map_or(false, |v| v == "1" || v == "true") }
+}
+
+fn tcp_addr() -> String {
+    env::var("SANDBOX_TCP_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:19999".to_string())
 }
 
 fn shim_bin_dir() -> PathBuf {
@@ -700,6 +776,9 @@ fn format_denial_log(cmd: &str, argv: &[String], denial: &PolicyDenial) -> Strin
 // ---------------------------------------------------------------------------
 
 fn run_daemon(sock_path: &Path) -> io::Result<()> {
+    if tcp_mode() {
+        return run_daemon_tcp();
+    }
     if let Some(parent) = sock_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -716,9 +795,6 @@ fn run_daemon(sock_path: &Path) -> io::Result<()> {
     set_permissions(sock_path, 0o660);
     eprintln!("sandbox daemon: listening on {}", sock_path.display());
 
-    // Capture the inode we just bound so cleanup can verify ownership before
-    // unlinking on signal. Without this, killing an orphan daemon (whose path
-    // has been re-bound by a newer one) would unlink the live daemon's file.
     let our_inode = {
         #[cfg(unix)]
         {
@@ -736,7 +812,39 @@ fn run_daemon(sock_path: &Path) -> io::Result<()> {
         match conn {
             Ok(stream) => {
                 thread::spawn(move || {
-                    let _ = handle_client(stream);
+                    let _ = handle_client(Transport::Unix(stream));
+                });
+            }
+            Err(_) => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
+fn run_daemon_tcp() -> io::Result<()> {
+    let addr = tcp_addr();
+    let listener = match TcpListener::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("sandbox daemon: listen tcp {}: {}", addr, e);
+            return Err(e);
+        }
+    };
+    eprintln!("sandbox daemon: listening on tcp {}", addr);
+
+    // No socket file to clean up — just exit on signal.
+    #[cfg(unix)]
+    setup_daemon_signals(PathBuf::new(), None);
+    #[cfg(windows)]
+    {
+        ctrlc::set_handler(move || process::exit(0)).expect("ctrl-c handler");
+    }
+
+    for conn in listener.incoming() {
+        match conn {
+            Ok(stream) => {
+                thread::spawn(move || {
+                    let _ = handle_client(Transport::Tcp(stream));
                 });
             }
             Err(_) => return Ok(()),
@@ -751,9 +859,16 @@ fn run_daemon(sock_path: &Path) -> io::Result<()> {
 fn run_daemon_check(sock_path: &Path) -> ! {
     use std::time::Duration;
 
-    let mut stream = match UnixStream::connect(sock_path) {
-        Ok(s) => s,
-        Err(_) => process::exit(1),
+    let mut stream = if tcp_mode() {
+        match TcpStream::connect(tcp_addr()) {
+            Ok(s) => Transport::Tcp(s),
+            Err(_) => process::exit(1),
+        }
+    } else {
+        match UnixStream::connect(sock_path) {
+            Ok(s) => Transport::Unix(s),
+            Err(_) => process::exit(1),
+        }
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
@@ -780,7 +895,7 @@ fn run_daemon_check(sock_path: &Path) -> ! {
     process::exit(1);
 }
 
-fn handle_client(mut conn: UnixStream) -> io::Result<()> {
+fn handle_client(mut conn: Transport) -> io::Result<()> {
     let (ftype, data) = match read_frame(&mut conn) {
         Ok(v) => v,
         Err(_) => return Ok(()),
@@ -838,7 +953,7 @@ fn handle_client(mut conn: UnixStream) -> io::Result<()> {
     }
 }
 
-fn handle_pipe(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
+fn handle_pipe(conn: Transport, req: ExecRequest) -> io::Result<()> {
     let writer: SharedWriter = Arc::new(Mutex::new(conn.try_clone()?));
 
     let mut builder = Command::new("/bin/sh");
@@ -940,7 +1055,7 @@ fn handle_pipe(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
     Ok(())
 }
 
-fn handle_pty(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
+fn handle_pty(conn: Transport, req: ExecRequest) -> io::Result<()> {
     let writer: SharedWriter = Arc::new(Mutex::new(conn.try_clone()?));
 
     let rows = if req.rows == 0 { 24 } else { req.rows };
@@ -1076,16 +1191,28 @@ fn handle_pty(conn: UnixStream, req: ExecRequest) -> io::Result<()> {
 // ---------------------------------------------------------------------------
 
 fn run_client(sock_path: &Path, cmd_name: &str, args: Vec<String>) -> ! {
-    let conn = match UnixStream::connect(sock_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!(
-                "sandbox: cannot connect to daemon at {}: {}",
-                sock_path.display(),
-                e
-            );
-            eprintln!("sandbox: start daemon with: sandbox daemon");
-            process::exit(1);
+    let conn: Transport = if tcp_mode() {
+        let addr = tcp_addr();
+        match TcpStream::connect(&addr) {
+            Ok(c) => Transport::Tcp(c),
+            Err(e) => {
+                eprintln!("sandbox: cannot connect to daemon at tcp {}: {}", addr, e);
+                eprintln!("sandbox: start daemon with: sandbox daemon");
+                process::exit(1);
+            }
+        }
+    } else {
+        match UnixStream::connect(sock_path) {
+            Ok(c) => Transport::Unix(c),
+            Err(e) => {
+                eprintln!(
+                    "sandbox: cannot connect to daemon at {}: {}",
+                    sock_path.display(),
+                    e
+                );
+                eprintln!("sandbox: start daemon with: sandbox daemon");
+                process::exit(1);
+            }
         }
     };
 

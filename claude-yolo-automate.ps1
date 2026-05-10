@@ -44,6 +44,11 @@ function Cleanup {
     }
 }
 
+# --- TCP config ---------------------------------------------------------------
+$SandboxTcpPort = if ($env:SANDBOX_TCP_PORT) { $env:SANDBOX_TCP_PORT } else { '19999' }
+$env:SANDBOX_TCP = '1'
+$env:SANDBOX_TCP_ADDR = "127.0.0.1:${SandboxTcpPort}"
+
 # --- Sandbox setup ------------------------------------------------------------
 if ($env:SANDBOX_MAP_PROCESSES) {
     $sandboxBin = Get-Command sandbox -ErrorAction SilentlyContinue
@@ -52,21 +57,14 @@ if ($env:SANDBOX_MAP_PROCESSES) {
         exit 1
     }
 
-    $binDir = Join-Path $SandboxDir 'bin'
-    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    # On Windows the daemon uses TCP. The Linux sandbox binary is baked into
+    # the image. Shims are created at container startup via the entrypoint.
+    New-Item -ItemType Directory -Path $SandboxDir -Force | Out-Null
 
-    # Copy sandbox binary into sandbox dir
-    $src = $sandboxBin.Source
-    $dst = Join-Path $binDir 'sandbox.exe'
-    if ((-not (Test-Path $dst)) -or ((Get-Item $src).LastWriteTime -gt (Get-Item $dst).LastWriteTime)) {
-        Copy-Item -Force $src $dst
-    }
-
-    # Start daemon if not running
-    $env:SANDBOX_BIN_DIR = $binDir
+    # Start TCP daemon if not running
     $checkResult = & sandbox daemon-check 2>$null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Starting sandbox daemon..."
+        Write-Host "Starting sandbox daemon (tcp :${SandboxTcpPort})..."
         Start-Process -FilePath 'sandbox' -ArgumentList 'daemon' -WindowStyle Hidden
         for ($i = 0; $i -lt 10; $i++) {
             Start-Sleep -Milliseconds 100
@@ -75,23 +73,33 @@ if ($env:SANDBOX_MAP_PROCESSES) {
         }
     }
 
-    # Map commands
-    foreach ($cmd in ($env:SANDBOX_MAP_PROCESSES -split '\s+')) {
-        if ($cmd) {
-            & sandbox map $cmd
-        }
-    }
-    Write-Host "=== sandbox mapped: $($env:SANDBOX_MAP_PROCESSES) ==="
+    # Write command-map.json directly (daemon uses this for whitelist).
+    # On Linux, `sandbox map` creates symlinks + writes this file.
+    # On Windows, we skip symlinks (useless for the Linux container) and
+    # just write the JSON. Shims are created inside the container at startup.
+    $cmds = ($env:SANDBOX_MAP_PROCESSES -split '\s+') | Where-Object { $_ }
+    $map = @{}
+    foreach ($cmd in $cmds) { $map[$cmd] = $cmd }
+    $mapJson = $map | ConvertTo-Json
+    [System.IO.File]::WriteAllText((Join-Path $SandboxDir 'command-map.json'), $mapJson, (New-Object System.Text.UTF8Encoding $false))
+    Write-Host "=== sandbox mapped: $($cmds -join ' ') ==="
 
-    # Auto-inject build-only podman policy
+    # Auto-inject build-only podman policy (write policy.json directly)
     $podmanPolicy = if ($env:SANDBOX_PODMAN_POLICY) { $env:SANDBOX_PODMAN_POLICY } else { 'build-only' }
     if ($env:SANDBOX_MAP_PROCESSES -match '\bpodman\b' -and $podmanPolicy -eq 'build-only') {
         $verbs = @('build','images','inspect','version','info','run','exec',
                    'ps','logs','top','stats','port','diff','history','events',
                    'search','wait','exists','compose')
-        foreach ($v in $verbs) {
-            & sandbox policy allow podman $v 2>$null
+        $policyFile = Join-Path $SandboxDir 'policy.json'
+        $existingPolicy = @{}
+        if (Test-Path $policyFile) {
+            try { $existingPolicy = Get-Content $policyFile -Raw | ConvertFrom-Json -AsHashtable } catch {}
         }
+        $allowRules = @()
+        foreach ($v in $verbs) { $allowRules += ,@($v) }
+        $existingPolicy['podman'] = @{ deny = @(); allow = $allowRules }
+        $policyJson = $existingPolicy | ConvertTo-Json -Depth 4
+        [System.IO.File]::WriteAllText($policyFile, $policyJson, (New-Object System.Text.UTF8Encoding $false))
         Write-Host "=== podman policy: allow-list = $($verbs -join ' ') ==="
     }
 }
@@ -101,14 +109,14 @@ $Engine = $null
 $UserArgs = @()
 $Image = $null
 
-if (Get-Command podman -ErrorAction SilentlyContinue) {
-    $Engine = 'podman'
-    $UserArgs = @('--userns=keep-id')
-    $Image = 'localhost/claude_code_base:latest'
-} elseif (Get-Command docker -ErrorAction SilentlyContinue) {
+if (Get-Command docker -ErrorAction SilentlyContinue) {
     $Engine = 'docker'
     $UserArgs = @('--user', '1000:1000')
     $Image = 'claude_code_base:latest'
+} elseif (Get-Command podman -ErrorAction SilentlyContinue) {
+    $Engine = 'podman'
+    $UserArgs = @('--userns=keep-id')
+    $Image = 'localhost/claude_code_base:latest'
 } else {
     Write-Host "Error: need 'podman' or 'docker' on PATH" -ForegroundColor Red
     exit 1
@@ -134,13 +142,15 @@ $sandboxVolumeArgs = @()
 $sandboxEnvArgs = @()
 
 if ($env:SANDBOX_MAP_PROCESSES) {
-    $sandboxBinPath = To-LinuxPath (Get-Command sandbox).Source
     $sandboxVolumeArgs = @(
         '-v', "${lSandboxDir}:/ultra_sandbox"
-        '-v', "${sandboxBinPath}:/usr/local/bin/sandbox:ro"
     )
+    $cmdsJoined = (($env:SANDBOX_MAP_PROCESSES -split '\s+') | Where-Object { $_ }) -join ' '
     $sandboxEnvArgs = @(
         '-e', 'SANDBOX_DIR=/ultra_sandbox'
+        '-e', 'SANDBOX_TCP=1'
+        '-e', "SANDBOX_TCP_ADDR=host.docker.internal:${SandboxTcpPort}"
+        '-e', "SANDBOX_MAP_CMDS=$cmdsJoined"
         '-e', "PATH=/ultra_sandbox/bin:${cHome}/.local/bin:/usr/local/bin:/usr/bin:/bin"
     )
 } else {
@@ -209,6 +219,18 @@ if (-not $env:SKIP_CLAUDE_PRUNE) {
 }
 
 # --- Launch container ---------------------------------------------------------
+# Entrypoint: create symlink shims inside the container, then exec claude.
+# Each mapped command gets a symlink: /ultra_sandbox/bin/<cmd> -> /usr/local/bin/sandbox
+# The sandbox binary detects argv[0] and acts as a client for that command.
+$entryScript = 'mkdir -p /ultra_sandbox/bin; for cmd in $SANDBOX_MAP_CMDS; do ln -sf /usr/local/bin/sandbox /ultra_sandbox/bin/$cmd; done; exec "$HOME/.local/bin/claude" --dangerously-skip-permissions "$@"'
+
+$entrypointArgs = @()
+if ($env:SANDBOX_MAP_PROCESSES) {
+    $entrypointArgs = @('--entrypoint', '/bin/sh', $Image, '-c', $entryScript, '--')
+} else {
+    $entrypointArgs = @('--entrypoint', "${cHome}/.local/bin/claude", $Image, '--dangerously-skip-permissions')
+}
+
 try {
     & $Engine run -it --rm `
         @UserArgs `
@@ -219,9 +241,7 @@ try {
         @envArgs `
         @sandboxEnvArgs `
         -w $lWorkDir `
-        --entrypoint "${cHome}/.local/bin/claude" `
-        $Image `
-        --dangerously-skip-permissions @args
+        @entrypointArgs @args
 } finally {
     Cleanup
 }
