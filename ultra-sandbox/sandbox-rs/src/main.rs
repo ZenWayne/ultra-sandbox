@@ -1197,7 +1197,7 @@ fn run_client(sock_path: &Path, cmd_name: &str, args: Vec<String>) -> ! {
 // ---------------------------------------------------------------------------
 
 fn run_map(bin_dir: &Path, cmd_name: &str, exec_path: Option<&str>, remove: bool) {
-    let shim_path = bin_dir.join(cmd_name);
+    let shim_path = shim_file_path(bin_dir, cmd_name);
     let mut map = load_command_map();
 
     if remove {
@@ -1213,27 +1213,49 @@ fn run_map(bin_dir: &Path, cmd_name: &str, exec_path: Option<&str>, remove: bool
 
     let target = exec_path.unwrap_or(cmd_name).to_string();
 
-    // Remove existing shim if present so symlink can be (re)created
+    // Remove existing shim if present so it can be (re)created
     if shim_path.exists() || shim_path.is_symlink() {
         let _ = fs::remove_file(&shim_path);
     }
 
-    // Create symlink: alias -> sandbox binary in the same bin dir
-    let sandbox_bin = bin_dir.join("sandbox");
+    let sandbox_bin = sandbox_bin_path(bin_dir);
     #[cfg(unix)]
     if let Err(e) = unix_symlink(&sandbox_bin, &shim_path) {
         eprintln!("sandbox map: symlink {}: {}", shim_path.display(), e);
         process::exit(1);
     }
     #[cfg(windows)]
-    {
-        eprintln!("sandbox map: symlinks not supported on Windows");
+    if let Err(e) = fs::hard_link(&sandbox_bin, &shim_path) {
+        eprintln!("sandbox map: hardlink {}: {}", shim_path.display(), e);
         process::exit(1);
     }
 
     map.insert(cmd_name.to_string(), target.clone());
     save_command_map(&map);
     println!("mapped: {} -> sandbox [resolves to: {}]", shim_path.display(), target);
+}
+
+/// On Windows shims need `.exe` to be directly executable; on Unix no extension.
+fn shim_file_path(bin_dir: &Path, cmd_name: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        bin_dir.join(format!("{}.exe", cmd_name))
+    }
+    #[cfg(unix)]
+    {
+        bin_dir.join(cmd_name)
+    }
+}
+
+fn sandbox_bin_path(bin_dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        bin_dir.join("sandbox.exe")
+    }
+    #[cfg(unix)]
+    {
+        bin_dir.join("sandbox")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1257,10 +1279,11 @@ fn usage() -> ! {
 }
 
 fn self_name(argv0: &str) -> String {
-    Path::new(argv0)
-        .file_name()
+    let name = Path::new(argv0)
+        .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    name
 }
 
 fn main() {
