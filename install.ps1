@@ -126,8 +126,10 @@ function Build-Image {
         Write-Host ""
         Push-Location $tmpdir
         try {
+            $cacheFlag = if ($env:USE_CACHE -eq '1') { @() } else { @('--no-cache') }
             $buildArgs = @(
-                'build', '-f', 'claude_code_base.Dockerfile',
+                'build') + $cacheFlag + @(
+                '-f', 'claude_code_base.Dockerfile',
                 '--build-arg', 'HOST_USER_UID=1000',
                 '--build-arg', 'HOST_USER_GID=1000',
                 '--build-arg', "HOST_USER_NAME=$hostUser",

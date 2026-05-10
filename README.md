@@ -102,6 +102,7 @@ powershell -c "irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main
 | `BRANCH` | `main` | Git ref (branch/tag/sha) for raw files (Dockerfile, launcher) |
 | `RELEASE_TAG` | `latest` | Release tag for the sandbox binary |
 | `IMAGE_TAG` | `claude_code_base` | Built image name |
+| `USE_CACHE` | — | `=1` to allow Docker layer cache (default: always rebuilds) |
 | `SKIP_SANDBOX` | — | `=1` to skip binary download |
 | `SKIP_IMAGE` | — | `=1` to skip image build |
 | `SKIP_LAUNCHER` | — | `=1` to skip launcher install |

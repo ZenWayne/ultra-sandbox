@@ -128,7 +128,10 @@ build_image() {
     log "Building image $IMAGE_TAG with $engine"
     (
         cd "$tmpdir"
+        local cache_flag=""
+        [ "${USE_CACHE:-}" != "1" ] && cache_flag="--no-cache"
         "$engine" build \
+            $cache_flag \
             -f claude_code_base.Dockerfile \
             --build-arg HOST_USER_UID="$(id -u)" \
             --build-arg HOST_USER_GID="$(id -g)" \

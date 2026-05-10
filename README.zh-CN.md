@@ -102,6 +102,7 @@ powershell -c "irm https://raw.githubusercontent.com/ZenWayne/ultra-sandbox/main
 | `BRANCH` | `main` | 拉取 raw 文件(Dockerfile、launcher)的 git ref(分支/tag/sha) |
 | `RELEASE_TAG` | `latest` | sandbox 二进制的 release 标签 |
 | `IMAGE_TAG` | `claude_code_base` | 构建出的镜像名 |
+| `USE_CACHE` | — | `=1` 允许 Docker 层缓存（默认总是全量重建） |
 | `SKIP_SANDBOX` | — | `=1` 跳过二进制下载 |
 | `SKIP_IMAGE` | — | `=1` 跳过镜像构建 |
 | `SKIP_LAUNCHER` | — | `=1` 跳过 launcher 安装 |
