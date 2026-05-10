@@ -25,15 +25,15 @@ jobs:
       # macos-latest no longer ships Docker. Install via colima — the Linux VM
       # runs the daemon, the docker CLI on the host talks to it. Slow (~3 min)
       # but the only sane way to test Linux containers on a Mac runner.
-      - name: Install Docker via colima (macOS)
+      - name: Install Docker (macOS)
         if: runner.os == 'macOS'
-        run: |
-          # `qemu` is needed because colima's default `vz` driver (Apple
-          # Virtualization Framework) fails to start the hostagent on GH
-          # macos-15-arm64 runners. qemu is slower but actually boots.
-          brew install --quiet colima docker qemu
-          colima start --vm-type=qemu --cpu 2 --memory 4 --disk 14
-          docker version
+        # GH macos-15-arm64 runners have neither Docker preinstalled nor a
+        # working colima default — the bundled lima 2.1.x qemu driver panics
+        # with "send on closed channel" and Apple's vz driver fails too. The
+        # crazy-max action wraps a known-good colima/lima setup that works.
+        uses: crazy-max/ghaction-setup-docker@v4
+        with:
+          version: latest
 
       - name: Run install.sh from this checkout
         # REPO/BRANCH overrides make install.sh fetch the Dockerfile + launcher
@@ -96,7 +96,12 @@ jobs:
           done
           sandbox daemon-check || { echo "FAIL: daemon did not come up"; exit 1; }
 
-          # 2. Map host python3 — daemon resolves it on host PATH
+          # 2. Stage the sandbox binary inside SANDBOX_DIR/bin so the shims
+          # `sandbox map` creates (relative symlinks pointing at "sandbox")
+          # actually resolve. Mirrors what claude-yolo-automate does.
+          install -m 755 "$(command -v sandbox)" "$SANDBOX_DIR/bin/sandbox"
+
+          # 3. Map host python3 — daemon resolves it on host PATH
           sandbox map python3
           test -x "$SANDBOX_DIR/bin/python3" || { echo "FAIL: shim not created"; exit 1; }
 
