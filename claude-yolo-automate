@@ -247,7 +247,10 @@ if [ -t 0 ]; then TTY_ARGS+=(-t); fi
     --network=host \
     `# host-gateway needed on non-Linux so the container's sandbox client` \
     `# can reach the host daemon via TCP (UDS doesn't traverse OS kernels).` \
-    $([ "$(uname -s)" != "Linux" ] && echo "--add-host=host.docker.internal:host-gateway") \
+    `# Docker Desktop maps host-gateway → host correctly; lima docker maps it` \
+    `# to the in-VM docker bridge gateway (172.17.0.1) which can't reach the` \
+    `# macOS host. Override via SANDBOX_HOST_IP=192.168.5.2 (lima default).` \
+    $([ "$(uname -s)" != "Linux" ] && echo "--add-host=host.docker.internal:${SANDBOX_HOST_IP:-host-gateway}") \
     "${VOLUME_ARGS[@]}" \
     "${SANDBOX_VOLUME_ARGS[@]}" \
     -v "$HOME/.ssh":"/home/$USER/.ssh:ro" \

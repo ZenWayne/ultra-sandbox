@@ -194,6 +194,11 @@ jobs:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
           SANDBOX_MAP_PROCESSES: python3
+          # lima 2.x slirp gateway-to-host IP. Docker's host-gateway on lima
+          # resolves to the in-VM docker bridge (172.17.0.1) which can't see
+          # the macOS host; this routes the container's sandbox client to
+          # the real macOS host where the daemon listens on TCP 19999.
+          SANDBOX_HOST_IP: ${{ matrix.os == 'macos-15-intel' && '192.168.5.2' || '' }}
         run: |
           set -euxo pipefail
           export PATH="$HOME/.local/bin:$PATH"
