@@ -80,9 +80,9 @@ jobs:
           mkdir -p "$HOME/.ssh" "$HOME/.claude"
           echo '{}' > "$HOME/.claude.json"
 
-      # ============== STEP 2: run claude-yolo-automate =======================
+      # ============== STEP 2a (Linux): full launcher → claude → python3 ======
       - name: Run claude-yolo-automate, ask Claude to invoke proxied python3
-        if: steps.key.outputs.available == 'true'
+        if: steps.key.outputs.available == 'true' && runner.os == 'Linux'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
@@ -126,5 +126,72 @@ jobs:
             cat /tmp/claude_out.txt
             echo "----- claude output (raw) -----"
             cat /tmp/claude_raw.txt
+            exit 1
+          fi
+
+      # ============== STEP 2b (macOS): direct UDS proxy verification ========
+      # The bash launcher mounts the host sandbox binary into the Linux
+      # container, which is a Mach-O binary on macOS and exec-fails inside
+      # Linux. Until the launcher is taught to skip that mount on non-Linux
+      # hosts (mirroring claude-yolo-automate.ps1's design), bypass the
+      # launcher and wire up the cross-OS proxy directly:
+      #   - host daemon: macOS sandbox listening on UDS in $SANDBOX_DIR
+      #   - container shim target: shell wrapper -> /usr/local/bin/sandbox
+      #     (the Linux sandbox baked into claude_code_base by install.sh)
+      #   - PATH: /ultra_sandbox/bin first, so python3 resolves to the shim
+      - name: Verify cross-OS sandbox proxy (macOS daemon ↔ Linux container)
+        if: matrix.os == 'macos-15-intel'
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          WORK="$RUNNER_TEMP/proj-macos"
+          mkdir -p "$WORK"
+          cd "$WORK"
+          export SANDBOX_DIR="$WORK/.ultra_sandbox"
+          mkdir -p "$SANDBOX_DIR/bin"
+
+          # Start daemon (macOS host)
+          nohup sandbox daemon >/tmp/daemon.log 2>&1 &
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 0.2
+            sandbox daemon-check >/dev/null 2>&1 && break
+          done
+          sandbox daemon-check || { echo "daemon failed to start"; cat /tmp/daemon.log; exit 1; }
+
+          sandbox map python3
+          ls -la "$SANDBOX_DIR/bin/"
+
+          # Overwrite the Mach-O binary `sandbox map` placed at bin/sandbox
+          # with a POSIX-sh wrapper. The container resolves the shim symlink
+          # python3 -> bin/sandbox -> this wrapper -> Linux sandbox in image.
+          cat > "$SANDBOX_DIR/bin/sandbox" <<'SH'
+          #!/bin/sh
+          exec /usr/local/bin/sandbox "$@"
+          SH
+          chmod 755 "$SANDBOX_DIR/bin/sandbox"
+          file "$SANDBOX_DIR/bin/sandbox"
+
+          HOST_VER="$(python3 --version 2>&1)"
+          echo "expecting host python: $HOST_VER"
+
+          docker run --rm \
+              -v "$SANDBOX_DIR:/ultra_sandbox" \
+              -e SANDBOX_DIR=/ultra_sandbox \
+              -e PATH=/ultra_sandbox/bin:/usr/local/bin:/usr/bin:/bin \
+              --entrypoint /bin/bash \
+              claude_code_base:latest \
+              -c 'set -e
+                  echo "=== container info ==="
+                  echo "uname: $(uname -s)"
+                  echo "image sandbox: $(file /usr/local/bin/sandbox)"
+                  echo "shim target:  $(file /ultra_sandbox/bin/sandbox)"
+                  ls -la /ultra_sandbox /ultra_sandbox/bin
+                  echo "=== running python3 via shim ==="
+                  python3 --version' 2>&1 | tee /tmp/container_out.txt
+
+          if grep -q '^uname: Linux$' /tmp/container_out.txt && grep -F "$HOST_VER" /tmp/container_out.txt >/dev/null; then
+            echo "PASS: macOS daemon ↔ Linux container sandbox via UDS"
+          else
+            echo "FAIL"
             exit 1
           fi
