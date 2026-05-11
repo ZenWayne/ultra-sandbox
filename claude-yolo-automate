@@ -135,11 +135,23 @@ fi
 # empty volume from the image; subsequent runs reuse the volume.
 CLAUDE_SHARE_VOLUME="${CLAUDE_SHARE_VOLUME:-claude_share}"
 CLAUDE_BIN_VOLUME="${CLAUDE_BIN_VOLUME:-claude_bin}"
+CLAUDE_CONFIG_VOLUME="${CLAUDE_CONFIG_VOLUME:-claude_config}"
 VOLUME_ARGS=(
     -v "$WORK_DIR:$WORK_DIR"
     -v "$CLAUDE_SHARE_VOLUME:/home/$USER/.local/share/claude"
     -v "$CLAUDE_BIN_VOLUME:/home/$USER/.local/bin"
 )
+
+# ~/.claude (claude's per-user state: session env, MCP, project history)
+#   Linux:    bind-mount the host dir so users see live state changes.
+#   non-Linux: lima's virtiofs marks the host home as read-only and claude
+#              needs to mkdir under ~/.claude — use a named volume to get
+#              writable, persistent storage that bypasses the host FS.
+if [ "$(uname -s)" = "Linux" ]; then
+    CLAUDE_CONFIG_VOLUME_ARG=(-v "$HOME/.claude:/home/$USER/.claude")
+else
+    CLAUDE_CONFIG_VOLUME_ARG=(-v "$CLAUDE_CONFIG_VOLUME:/home/$USER/.claude")
+fi
 SANDBOX_VOLUME_ARGS=()
 SANDBOX_ENV_ARGS=()
 if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
@@ -209,12 +221,10 @@ if [ -t 0 ]; then TTY_ARGS+=(-t); fi
     "${VOLUME_ARGS[@]}" \
     "${SANDBOX_VOLUME_ARGS[@]}" \
     -v "$HOME/.ssh":"/home/$USER/.ssh:ro" \
-    -v "$HOME/.claude":"/home/$USER/.claude" \
-    `# claude.json is bind-mounted only on Linux. lima/virtiofs (the docker` \
-    `# stack on hosted macOS runners and Docker Desktop) returns size-0 reads` \
-    `# from this single-file mount once claude has it open for read+write,` \
-    `# causing claude -p to exit 0 with no output. Skipping the mount lets` \
-    `# claude use the container-local copy; ~/.claude/ still persists state.` \
+    "${CLAUDE_CONFIG_VOLUME_ARG[@]}" \
+    `# claude.json: single-file bind-mounts through lima/virtiofs return` \
+    `# 0-byte reads once claude opens them rw, so claude -p silently no-ops.` \
+    `# Skip on non-Linux; claude uses the container-local default.` \
     $([ "$(uname -s)" = "Linux" ] && echo "-v $HOME/.claude.json:/home/$USER/.claude.json") \
     $([ -d "$HOME/Pictures/screenshot" ] && echo "-v $HOME/Pictures/screenshot:/home/$USER/Pictures/screenshot") \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
