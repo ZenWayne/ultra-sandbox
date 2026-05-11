@@ -30,7 +30,12 @@ jobs:
         run: |
           set -euxo pipefail
           brew install docker colima
-          colima start --vm-type vz --cpu 2 --memory 4
+          if ! colima start --vm-type vz --verbose; then
+            echo "::group::ha.stderr.log"; cat ~/.colima/_lima/colima/ha.stderr.log 2>/dev/null || true; echo "::endgroup::"
+            echo "::group::ha.stdout.log"; cat ~/.colima/_lima/colima/ha.stdout.log 2>/dev/null || true; echo "::endgroup::"
+            echo "::group::serial.log"; cat ~/.colima/_lima/colima/serial.log 2>/dev/null || true; echo "::endgroup::"
+            exit 1
+          fi
           docker info
 
       - name: Detect API key availability
