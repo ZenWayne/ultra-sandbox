@@ -37,6 +37,20 @@ if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
         exit 1
     fi
 
+    # On non-Linux hosts the daemon ↔ in-container sandbox link must use TCP,
+    # not UDS: lima/virtiofs (macOS) and the Linux VM behind Docker Desktop
+    # forward the socket file across host filesystems, but a UDS endpoint is
+    # per-kernel — the container's connect(2) can't reach the listener that
+    # lives in the macOS / Windows kernel. claude-yolo-automate.ps1 already
+    # does TCP for the same reason. Set the daemon's TCP env so it listens
+    # on 0.0.0.0:19999 (or SANDBOX_TCP_PORT) and the container's sandbox
+    # client points at host-gateway:19999 (set in SANDBOX_ENV_ARGS below).
+    if [ "$(uname -s)" != "Linux" ]; then
+        SANDBOX_TCP_PORT="${SANDBOX_TCP_PORT:-19999}"
+        export SANDBOX_TCP=1
+        export SANDBOX_TCP_ADDR="0.0.0.0:${SANDBOX_TCP_PORT}"
+    fi
+
     mkdir -p "$SANDBOX_DIR/bin"
     # Shims (symlinks) point at $SANDBOX_DIR/bin/sandbox, which is exec'd
     # inside the Linux container. The host arch matters:
@@ -171,6 +185,15 @@ if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
         -e SANDBOX_DIR="/ultra_sandbox"
         -e PATH="/ultra_sandbox/bin:/home/$USER/.local/bin:/usr/local/bin:/usr/bin:/bin"
     )
+    # Non-Linux: container reaches the host daemon via TCP through the
+    # docker host-gateway alias (added below). On Linux the in-process
+    # UDS file in $SANDBOX_DIR/daemon.sock works as before.
+    if [ "$(uname -s)" != "Linux" ]; then
+        SANDBOX_ENV_ARGS+=(
+            -e SANDBOX_TCP=1
+            -e SANDBOX_TCP_ADDR="host.docker.internal:${SANDBOX_TCP_PORT}"
+        )
+    fi
 else
     SANDBOX_ENV_ARGS=(
         -e PATH="/home/$USER/.local/bin:/usr/local/bin:/usr/bin:/bin"
@@ -218,6 +241,9 @@ if [ -t 0 ]; then TTY_ARGS+=(-t); fi
 "$ENGINE" run "${TTY_ARGS[@]}" --rm \
     "${USER_ARGS[@]}" \
     --network=host \
+    `# host-gateway needed on non-Linux so the container's sandbox client` \
+    `# can reach the host daemon via TCP (UDS doesn't traverse OS kernels).` \
+    $([ "$(uname -s)" != "Linux" ] && echo "--add-host=host.docker.internal:host-gateway") \
     "${VOLUME_ARGS[@]}" \
     "${SANDBOX_VOLUME_ARGS[@]}" \
     -v "$HOME/.ssh":"/home/$USER/.ssh:ro" \
