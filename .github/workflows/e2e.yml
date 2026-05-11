@@ -80,6 +80,21 @@ jobs:
           mkdir -p "$HOME/.ssh" "$HOME/.claude"
           echo '{}' > "$HOME/.claude.json"
 
+      # ============== diag: smoke-test image + docker -i ====================
+      # Diagnostics only — does NOT substitute for the launcher. Confirms the
+      # claude_code_base image actually runs claude inside lima/qemu docker
+      # before we invoke the real launcher. Fails the build noisily if the
+      # image itself is broken so we don't blame the launcher.
+      - name: diag - smoke-test claude_code_base image
+        run: |
+          set -euxo pipefail
+          echo "=== docker info ==="; docker version || true
+          echo "=== image inspect ==="; docker image inspect claude_code_base:latest | head -50
+          echo "=== claude --version inside container ==="
+          docker run --rm -i \
+            --entrypoint /home/$USER/.local/bin/claude \
+            claude_code_base:latest --version
+
       # ============== STEP 2: run claude-yolo-automate =======================
       # Drives the real launcher (cross-OS) — Linux and macOS share this path.
       # The launcher now uses `-i` when stdin isn't a TTY, so no `script(1)`
