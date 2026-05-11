@@ -32,6 +32,12 @@ jobs:
         with:
           targets: x86_64-apple-darwin
 
+      - name: Cache cargo deps (macOS Intel)
+        if: matrix.os == 'macos-15-intel'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ultra-sandbox/sandbox-rs -> target
+
       - name: cargo build sandbox + install (macOS Intel)
         if: matrix.os == 'macos-15-intel'
         working-directory: ultra-sandbox/sandbox-rs
@@ -40,6 +46,17 @@ jobs:
           cargo build --release --target x86_64-apple-darwin
           mkdir -p "$HOME/.local/bin"
           install -m 755 target/x86_64-apple-darwin/release/sandbox "$HOME/.local/bin/sandbox"
+
+      # ~600 MB ubuntu cloud image lima downloads on first VM boot. Cached by
+      # content-hash dir name, so the key only needs to be stable across runs;
+      # bump the suffix to invalidate (e.g., when lima upgrades to a new
+      # ubuntu release).
+      - name: Cache lima downloads (macOS Intel)
+        if: matrix.os == 'macos-15-intel'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/lima
+          key: lima-cache-${{ runner.os }}-ubuntu24.04-v1
 
       - name: Install Docker (macOS Intel)
         if: matrix.os == 'macos-15-intel'
@@ -60,8 +77,28 @@ jobs:
             echo "::warning::ANTHROPIC_API_KEY not set — Claude end-to-end test cannot run"
           fi
 
+      # Cache the claude_code_base image as a tarball across runs. The image
+      # build is the slowest part of the macOS path (apt-get install + claude
+      # installer ≈ 5–8 min). Key by Dockerfile hash so any change rebuilds.
+      - name: Restore claude_code_base image (macOS Intel)
+        if: matrix.os == 'macos-15-intel'
+        id: image-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/claude_code_base.tar.gz
+          key: claude-image-${{ runner.os }}-${{ hashFiles('ultra-sandbox/claude_code_base.Dockerfile') }}
+
+      - name: Load cached image if hit (macOS Intel)
+        if: matrix.os == 'macos-15-intel' && steps.image-cache.outputs.cache-hit == 'true'
+        run: |
+          set -euxo pipefail
+          gunzip -c /tmp/claude_code_base.tar.gz | docker load
+          docker images claude_code_base
+
       # ============== STEP 1: run install.sh =================================
       - name: Run install.sh
+        env:
+          SKIP_IMAGE: ${{ (matrix.os == 'macos-15-intel' && steps.image-cache.outputs.cache-hit == 'true') && '1' || '' }}
         run: |
           set -euxo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -70,6 +107,13 @@ jobs:
           BRANCH="${{ github.event.pull_request.head.sha || github.sha }}" \
           REPO="${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
             bash install.sh
+
+      - name: Save built image for next run (macOS Intel)
+        if: matrix.os == 'macos-15-intel' && steps.image-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          docker save claude_code_base:latest | gzip > /tmp/claude_code_base.tar.gz
+          ls -lh /tmp/claude_code_base.tar.gz
 
       - name: Stage host paths the launcher bind-mounts
         run: |
