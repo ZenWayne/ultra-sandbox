@@ -15,33 +15,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13]
+        os: [ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     # Forks can't read secrets; only run on same-repo events
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
 
-      # macOS Intel: until the next release publishes sandbox-darwin-x86_64,
-      # build it inline and pair with SKIP_SANDBOX=1 in the install step below.
-      - name: Build sandbox from source (macOS Intel)
-        if: matrix.os == 'macos-13'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin
-
-      - name: cargo build sandbox + install (macOS Intel)
-        if: matrix.os == 'macos-13'
-        working-directory: ultra-sandbox/sandbox-rs
-        run: |
-          set -euxo pipefail
-          cargo build --release --target x86_64-apple-darwin
-          mkdir -p "$HOME/.local/bin"
-          install -m 755 target/x86_64-apple-darwin/release/sandbox "$HOME/.local/bin/sandbox"
-
-      - name: Install Docker (macOS Intel)
-        if: matrix.os == 'macos-13'
-        # Intel macOS supports HVF; lima/qemu boots correctly here.
+      - name: Install Docker (macOS arm64)
+        if: matrix.os == 'macos-14'
+        # Apple Silicon runners boot lima via the Virtualization.framework (vz) driver.
         uses: crazy-max/ghaction-setup-docker@v4
         with:
           version: latest
@@ -62,9 +45,6 @@ jobs:
       - name: Run install.sh
         run: |
           set -euxo pipefail
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            export SKIP_SANDBOX=1   # binary already built+installed above
-          fi
           BRANCH="${{ github.event.pull_request.head.sha || github.sha }}" \
           REPO="${{ github.event.pull_request.head.repo.full_name || github.repository }}" \
             bash install.sh
