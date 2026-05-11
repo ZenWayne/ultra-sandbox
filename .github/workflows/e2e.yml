@@ -124,65 +124,6 @@ jobs:
           mkdir -p "$HOME/.ssh" "$HOME/.claude"
           echo '{}' > "$HOME/.claude.json"
 
-      # ============== diag: smoke-test image + docker -i ====================
-      # Diagnostics only — does NOT substitute for the launcher. Confirms the
-      # claude_code_base image actually runs claude inside lima/qemu docker
-      # before we invoke the real launcher. Fails the build noisily if the
-      # image itself is broken so we don't blame the launcher.
-      - name: diag - smoke-test claude_code_base image
-        run: |
-          set -euxo pipefail
-          # Match the launcher's engine preference (podman first on Linux,
-          # docker on macOS). Hardcoding docker breaks Ubuntu where podman
-          # is the default and the install.sh image lives in podman storage.
-          if command -v podman >/dev/null 2>&1; then ENGINE=podman; else ENGINE=docker; fi
-          echo "=== engine: $ENGINE ==="
-          $ENGINE version
-          echo "=== claude --version inside container ==="
-          $ENGINE run --rm -i \
-            --entrypoint "/home/$USER/.local/bin/claude" \
-            claude_code_base:latest --version
-
-      # ============== diag: daemon TCP listener + container reachability ====
-      # On non-Linux hosts the launcher runs the sandbox daemon over TCP.
-      # If the in-container client can't reach it, isolate whether the daemon
-      # actually bound the port on the host vs the container resolving the
-      # wrong IP for host.docker.internal.
-      - name: diag - daemon TCP and container host-gateway resolution
-        if: matrix.os == 'macos-15-intel'
-        env:
-          SANDBOX_MAP_PROCESSES: python3
-          SANDBOX_DAEMON_LOG: /tmp/sandbox-daemon.log
-        run: |
-          set -euxo pipefail
-          export PATH="$HOME/.local/bin:$PATH"
-          # Boot the daemon the same way the launcher will, with TCP env set.
-          export SANDBOX_TCP=1
-          export SANDBOX_TCP_ADDR="0.0.0.0:19999"
-          nohup sandbox daemon >/tmp/sandbox-daemon.log 2>&1 &
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
-            sleep 0.2
-            sandbox daemon-check >/dev/null 2>&1 && break
-          done
-
-          echo "=== sandbox-daemon.log ==="
-          cat /tmp/sandbox-daemon.log || true
-
-          echo "=== lsof :19999 on macOS host ==="
-          lsof -nP -iTCP:19999 -sTCP:LISTEN || echo "(nothing listening)"
-
-          echo "=== container's view of host.docker.internal ==="
-          docker run --rm --network=host \
-            --add-host=host.docker.internal:host-gateway \
-            alpine sh -c '
-              echo "/etc/hosts entries:"; grep -i docker /etc/hosts || true
-              echo "resolution:"; getent hosts host.docker.internal || true
-              echo "tcp probe (nc -zv 5s):"; (apk add --no-cache netcat-openbsd >/dev/null 2>&1 && nc -zvw 5 host.docker.internal 19999) || true
-            ' || true
-
-          # Cleanup so STEP 2's launcher starts its own daemon fresh
-          pkill -f "sandbox daemon" || true
-
       # ============== STEP 2: run claude-yolo-automate =======================
       # Drives the real launcher (cross-OS) — Linux and macOS share this path.
       # The launcher now uses `-i` when stdin isn't a TTY, so no `script(1)`
