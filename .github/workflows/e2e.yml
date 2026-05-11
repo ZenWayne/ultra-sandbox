@@ -86,6 +86,11 @@ jobs:
       # before we invoke the real launcher. Fails the build noisily if the
       # image itself is broken so we don't blame the launcher.
       - name: diag - smoke-test claude_code_base image
+        if: steps.key.outputs.available == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
         run: |
           set -euxo pipefail
           # Match the launcher's engine preference (podman first on Linux,
@@ -94,12 +99,30 @@ jobs:
           if command -v podman >/dev/null 2>&1; then ENGINE=podman; else ENGINE=docker; fi
           echo "=== engine: $ENGINE ==="
           $ENGINE version
-          echo "=== image inspect ==="
-          $ENGINE image inspect claude_code_base:latest | head -50
-          echo "=== claude --version inside container ==="
+          echo "=== claude --version inside container (no mounts/env) ==="
           $ENGINE run --rm -i \
             --entrypoint "/home/$USER/.local/bin/claude" \
             claude_code_base:latest --version
+
+          # Diagnostic: minimal claude -p invocation with API env but NONE
+          # of the launcher's bind mounts. If this fails identically to
+          # STEP 2, claude itself can't make API calls in this container.
+          # If it succeeds, a launcher mount is breaking claude (most
+          # likely the .claude.json file mount on virtiofs).
+          echo "=== claude -p with API env, no mounts ==="
+          set +e
+          $ENGINE run --rm -i \
+            -e ANTHROPIC_API_KEY -e ANTHROPIC_BASE_URL -e ANTHROPIC_MODEL \
+            --entrypoint "/home/$USER/.local/bin/claude" \
+            claude_code_base:latest \
+            --dangerously-skip-permissions -p "Reply with the single word: pong" --output-format text \
+            > /tmp/diag_minimal.txt 2>&1
+          RC=$?
+          set -e
+          echo "minimal claude exit: $RC"
+          echo "minimal output (size $(wc -c </tmp/diag_minimal.txt) bytes):"
+          cat /tmp/diag_minimal.txt
+          echo "=== end minimal diag ==="
 
       # ============== STEP 2: run claude-yolo-automate =======================
       # Drives the real launcher (cross-OS) — Linux and macOS share this path.
