@@ -42,11 +42,14 @@ RUN if getent group ${HOST_USER_GID} > /dev/null 2>&1; then \
         useradd --uid ${HOST_USER_UID} --gid ${HOST_USER_GID} -m -s /bin/bash ${HOST_USER_NAME}; \
     fi
 
-# Install sandbox binary (Linux) for command proxying to host daemon
+# Install sandbox binary (statically linked Linux musl) for command proxying
+# to the host daemon. Always Linux/musl regardless of host OS — the bash and
+# powershell launchers rely on the container having its own ELF binary rather
+# than relying on a host bind-mount that would be wrong-arch on macOS/Windows.
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
         amd64) ASSET="sandbox-linux-x86_64" ;; \
-        arm64) ASSET="sandbox-darwin-arm64" ;; \
+        arm64) ASSET="sandbox-linux-arm64" ;; \
         *) echo "unsupported arch: $ARCH" && exit 1 ;; \
     esac && \
     curl -fsSL "https://github.com/ZenWayne/ultra-sandbox/releases/latest/download/$ASSET" \
