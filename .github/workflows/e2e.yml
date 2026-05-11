@@ -56,18 +56,21 @@ jobs:
         if: matrix.os == 'macos-15-intel'
         run: |
           set -euxo pipefail
-          brew install --cask docker
-          # Undocumented but commonly used in CI to pre-accept EULA so the
-          # GUI dialog doesn't block first launch.
-          sudo /Applications/Docker.app/Contents/MacOS/install accept-license || true
-          # Pre-seed user prefs so the onboarding tutorial doesn't pop up.
+          # Cask was renamed `docker` → `docker-desktop` in 2024 (Docker Inc
+          # made the desktop product the sole .app delivery); use the new
+          # name explicitly.
+          brew install --cask docker-desktop
+          # Pre-seed user prefs so the onboarding tutorial doesn't pop up
+          # (older `install accept-license` subcommand was removed in 4.x).
           defaults write com.docker.docker SkipFirstRunTutorial -bool true || true
           defaults write com.docker.docker AnalyticsEnabled -bool false || true
-          open --background -a Docker
+          # Use the absolute path: `open -a Docker` fails before LaunchServices
+          # has reindexed a freshly installed app.
+          open --background /Applications/Docker.app
           echo "Waiting for docker daemon..."
-          for i in $(seq 1 90); do
+          for i in $(seq 1 180); do
             if docker info >/dev/null 2>&1; then
-              echo "docker ready after ${i}*2 seconds"
+              echo "docker ready after $((i * 2)) seconds"
               break
             fi
             sleep 2
