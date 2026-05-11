@@ -22,12 +22,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Docker (macOS arm64)
+      - name: Install Docker via colima (macOS arm64)
         if: matrix.os == 'macos-14'
-        # Apple Silicon runners boot lima via the Virtualization.framework (vz) driver.
-        uses: crazy-max/ghaction-setup-docker@v4
-        with:
-          version: latest
+        # Apple Silicon GitHub runners already run inside Apple's Virtualization
+        # framework, so nested HVF fails with HV_UNSUPPORTED. colima --vm-type vz
+        # uses Virtualization.framework directly and works in that nested context.
+        run: |
+          set -euxo pipefail
+          brew install docker colima
+          colima start --vm-type vz --cpu 2 --memory 4
+          docker info
 
       - name: Detect API key availability
         id: key
