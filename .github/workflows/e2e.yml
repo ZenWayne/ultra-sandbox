@@ -124,20 +124,26 @@ jobs:
           cd "$WORK"
 
           PROMPT='Use the Bash tool to run python3 --version. Reply with ONLY that exact command output line, no preamble, no markdown, no extra words.'
-          claude-yolo-automate -p "$PROMPT" --output-format text 2>&1 | tee /tmp/claude_raw.txt
 
-          # Strip ANSI/CR claude emits even in text mode
-          sed -E $'s/\x1B\\[[0-9;]*[A-Za-z]//g; s/\r//g' /tmp/claude_raw.txt > /tmp/claude_out.txt
+          # Capture exit code separately so we can always print diagnostics
+          # rather than letting pipefail swallow them. stream-json gives us
+          # every message claude emits, including init failures and tool
+          # errors that --output-format text silently drops.
+          set +e
+          claude-yolo-automate -p "$PROMPT" --output-format stream-json --verbose > /tmp/claude_raw.txt 2>&1
+          RC=$?
+          set -e
+
+          echo "=== launcher exit code: $RC ==="
+          echo "=== /tmp/claude_raw.txt (size: $(wc -c </tmp/claude_raw.txt) bytes) ==="
+          cat /tmp/claude_raw.txt
+          echo "=== end raw ==="
 
           HOST_VER="$(python3 --version 2>&1)"
           echo "expecting host python: $HOST_VER"
-          if grep -F "$HOST_VER" /tmp/claude_out.txt >/dev/null; then
+          if grep -F "$HOST_VER" /tmp/claude_raw.txt >/dev/null; then
             echo "PASS: claude-yolo-automate -> Claude -> Bash python3 -> proxied to host"
           else
-            echo "FAIL: host python version not in Claude reply"
-            echo "----- claude output (cleaned) -----"
-            cat /tmp/claude_out.txt
-            echo "----- claude output (raw) -----"
-            cat /tmp/claude_raw.txt
+            echo "FAIL: host python version not in Claude reply (launcher exit=$RC)"
             exit 1
           fi
