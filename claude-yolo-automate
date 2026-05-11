@@ -38,16 +38,28 @@ if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
     fi
 
     mkdir -p "$SANDBOX_DIR/bin"
-    # Shims are symlinks to $SANDBOX_DIR/bin/sandbox, so the binary must live
-    # here. Use atomic rename (write tmp, mv) instead of `cp -u` so an
-    # incumbent daemon executing this same path doesn't trip ETXTBSY — mv
-    # unlinks the old inode (still mapped by the running daemon, fine) and
-    # puts the new file at the path.
-    src=$(command -v sandbox)
+    # Shims (symlinks) point at $SANDBOX_DIR/bin/sandbox, which is exec'd
+    # inside the Linux container. The host arch matters:
+    #   Linux host  → cp the host binary (same arch + ABI as the container);
+    #                 atomic rename (tmp + mv) so an in-flight daemon's
+    #                 mapped pages aren't disturbed (ETXTBSY-safe).
+    #   non-Linux   → host binary is Mach-O/PE and exec-fails on Linux. Drop
+    #                 a tiny bash bridge that defers to the image's baked-in
+    #                 /usr/local/bin/sandbox, preserving argv[0] so the
+    #                 in-container sandbox knows which command to proxy.
     dst="$SANDBOX_DIR/bin/sandbox"
-    if [ ! -e "$dst" ] || [ "$src" -nt "$dst" ]; then
-        tmp=$(mktemp "${dst}.XXXXXX")
-        cp "$src" "$tmp" && chmod 755 "$tmp" && mv -f "$tmp" "$dst"
+    if [ "$(uname -s)" = "Linux" ]; then
+        src=$(command -v sandbox)
+        if [ ! -e "$dst" ] || [ "$src" -nt "$dst" ]; then
+            tmp=$(mktemp "${dst}.XXXXXX")
+            cp "$src" "$tmp" && chmod 755 "$tmp" && mv -f "$tmp" "$dst"
+        fi
+    else
+        cat > "$dst" <<'SH'
+#!/bin/bash
+exec -a "$(basename "$0")" /usr/local/bin/sandbox "$@"
+SH
+        chmod 755 "$dst"
     fi
 
     # Probe the incumbent daemon (if any). `daemon-check` PINGs the socket and
@@ -133,8 +145,16 @@ SANDBOX_ENV_ARGS=()
 if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
     SANDBOX_VOLUME_ARGS=(
         -v "$SANDBOX_DIR:/ultra_sandbox"
-        -v "$HOME/.local/bin/sandbox:/usr/local/bin/sandbox:ro"
     )
+    # Linux hosts mount the host's sandbox binary over the image's copy so
+    # development can iterate without rebuilding the image. Non-Linux hosts
+    # can't (host binary is wrong format for the Linux container) — the
+    # image's baked-in /usr/local/bin/sandbox is used as-is.
+    if [ "$(uname -s)" = "Linux" ]; then
+        SANDBOX_VOLUME_ARGS+=(
+            -v "$HOME/.local/bin/sandbox:/usr/local/bin/sandbox:ro"
+        )
+    fi
     SANDBOX_ENV_ARGS=(
         -e SANDBOX_DIR="/ultra_sandbox"
         -e PATH="/ultra_sandbox/bin:/home/$USER/.local/bin:/usr/local/bin:/usr/bin:/bin"
@@ -176,7 +196,14 @@ if [ -z "$SKIP_CLAUDE_PRUNE" ]; then
             done' || true
 fi
 
-"$ENGINE" run -it --rm \
+# `-t` requires stdin to be a TTY; honor that so CI / piped invocations
+# (where the caller's stdin is redirected) don't hit the engine's
+# "the input device is not a TTY" error. Interactive sessions still get
+# a full PTY.
+TTY_ARGS=(-i)
+if [ -t 0 ]; then TTY_ARGS+=(-t); fi
+
+"$ENGINE" run "${TTY_ARGS[@]}" --rm \
     "${USER_ARGS[@]}" \
     --network=host \
     "${VOLUME_ARGS[@]}" \

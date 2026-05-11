@@ -60,3 +60,7 @@ Then launch the container:
 claude-yolo-automate                   # Claude Code in any project
 bash ultra-sandbox/ultra-sandbox.sh    # Generic dev shell, no Claude
 ```
+
+## CI rules
+
+**e2e tests must drive `claude-yolo-automate` directly** (or `claude-yolo-automate.ps1` on Windows), never a hand-rolled `docker run` that replicates parts of the launcher. The point of `.github/workflows/e2e.yml` is to cover the real user-facing entry point; if the launcher is broken on a platform, fix it in the launcher script and let the test stay honest. Custom `docker run` steps inside the workflow are acceptable only as **diagnostics** (separate step, name prefixed `diag:`), never as a substitute for the launcher path.
