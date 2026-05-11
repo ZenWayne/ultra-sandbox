@@ -49,6 +49,38 @@ if [ -n "$SANDBOX_MAP_PROCESSES" ]; then
         SANDBOX_TCP_PORT="${SANDBOX_TCP_PORT:-19999}"
         export SANDBOX_TCP=1
         export SANDBOX_TCP_ADDR="0.0.0.0:${SANDBOX_TCP_PORT}"
+
+        # Resolve what `host.docker.internal` should map to inside the
+        # container so its sandbox client can reach this daemon.
+        #   Docker Desktop  → "host-gateway" is special-cased and works.
+        #   lima            → host-gateway resolves to the docker bridge gw
+        #                     inside the lima VM (e.g. 172.17.0.1), which
+        #                     can't see the macOS host. lima exposes the
+        #                     macOS-side slirp gateway as `host.lima.internal`
+        #                     in its VM /etc/hosts — read that.
+        # Cache the resolved value next to the daemon socket so we don't
+        # spin up a probe container on every launch. User can override with
+        # SANDBOX_HOST_IP=... or delete the cache to redetect.
+        if [ -z "${SANDBOX_HOST_IP:-}" ]; then
+            mkdir -p "$SANDBOX_DIR"
+            host_ip_cache="$SANDBOX_DIR/.host_ip"
+            if [ -s "$host_ip_cache" ]; then
+                SANDBOX_HOST_IP=$(cat "$host_ip_cache")
+            else
+                _engine_probe=$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || true)
+                _detected=""
+                if [ -n "$_engine_probe" ]; then
+                    _probe_img="claude_code_base:latest"
+                    "$_engine_probe" image inspect "$_probe_img" >/dev/null 2>&1 || _probe_img="alpine"
+                    _detected=$("$_engine_probe" run --rm --entrypoint=/bin/cat \
+                        -v /etc/hosts:/_hosts:ro "$_probe_img" /_hosts 2>/dev/null \
+                        | awk '/host\.lima\.internal/ {print $1; exit}' || true)
+                fi
+                SANDBOX_HOST_IP="${_detected:-host-gateway}"
+                echo "$SANDBOX_HOST_IP" > "$host_ip_cache"
+            fi
+            export SANDBOX_HOST_IP
+        fi
     fi
 
     mkdir -p "$SANDBOX_DIR/bin"
