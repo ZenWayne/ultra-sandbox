@@ -124,6 +124,29 @@ jobs:
           cat /tmp/diag_minimal.txt
           echo "=== end minimal diag ==="
 
+          # Diagnostic: same as above but ADD just the .claude.json file
+          # bind-mount that the launcher does. This is the prime suspect
+          # for macOS — virtiofs has known issues with single-file mounts.
+          # Need to seed the host file first (Stage step does this but
+          # only for Linux/macOS launcher path; here we also need it).
+          mkdir -p "$HOME/.claude"
+          echo '{}' > "$HOME/.claude.json"
+          echo "=== claude -p WITH .claude.json file mount ==="
+          set +e
+          $ENGINE run --rm -i \
+            -e ANTHROPIC_API_KEY -e ANTHROPIC_BASE_URL -e ANTHROPIC_MODEL \
+            -v "$HOME/.claude.json":"/home/$USER/.claude.json" \
+            --entrypoint "/home/$USER/.local/bin/claude" \
+            claude_code_base:latest \
+            --dangerously-skip-permissions -p "Reply with the single word: pong" --output-format text \
+            > /tmp/diag_with_json.txt 2>&1
+          RC=$?
+          set -e
+          echo "with-json claude exit: $RC"
+          echo "with-json output (size $(wc -c </tmp/diag_with_json.txt) bytes):"
+          cat /tmp/diag_with_json.txt
+          echo "=== end with-json diag ==="
+
       # ============== STEP 2: run claude-yolo-automate =======================
       # Drives the real launcher (cross-OS) — Linux and macOS share this path.
       # The launcher now uses `-i` when stdin isn't a TTY, so no `script(1)`
