@@ -81,9 +81,13 @@ SH
     # daemons whose cwd/SANDBOX_DIR has been deleted or moved, which the old
     # ss-string-match check happily trusted. If the probe fails, start a new
     # daemon; it self-evicts any incumbent at the same socket path.
+    # Optional daemon log path (set SANDBOX_DAEMON_LOG=/path/to/log to keep
+    # the daemon's stderr — TCP bind errors, "listening on" message — for
+    # diagnostics). Defaults to discarding to match prior behaviour.
+    daemon_log_target="${SANDBOX_DAEMON_LOG:-/dev/null}"
     if ! sandbox daemon-check >/dev/null 2>&1; then
         echo "Starting sandbox daemon..."
-        nohup sandbox daemon >/dev/null 2>&1 &
+        nohup sandbox daemon >"$daemon_log_target" 2>&1 &
         disown
         for _ in 1 2 3 4 5 6 7 8 9 10; do
             sleep 0.1
