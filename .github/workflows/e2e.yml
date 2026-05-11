@@ -47,23 +47,37 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           install -m 755 target/x86_64-apple-darwin/release/sandbox "$HOME/.local/bin/sandbox"
 
-      # ~600 MB ubuntu cloud image lima downloads on first VM boot. Cached by
-      # content-hash dir name, so the key only needs to be stable across runs;
-      # bump the suffix to invalidate (e.g., when lima upgrades to a new
-      # ubuntu release).
-      - name: Cache lima downloads (macOS Intel)
+      # Docker Desktop on hosted macOS runners: GitHub removed the
+      # pre-installed Docker Desktop in 2024 due to licensing changes, so
+      # we brew-cask install + EULA-accept + open the app + wait for daemon.
+      # This exercises the launcher's `host-gateway` auto-detection path
+      # (vs lima, which needs the 192.168.5.2 slirp gateway fallback).
+      - name: Install Docker Desktop (macOS Intel)
         if: matrix.os == 'macos-15-intel'
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/lima
-          key: lima-cache-${{ runner.os }}-ubuntu24.04-v1
-
-      - name: Install Docker (macOS Intel)
-        if: matrix.os == 'macos-15-intel'
-        # Intel macOS supports HVF; lima/qemu boots correctly here.
-        uses: crazy-max/ghaction-setup-docker@v4
-        with:
-          version: latest
+        run: |
+          set -euxo pipefail
+          # Cask was renamed `docker` → `docker-desktop` in 2024 (Docker Inc
+          # made the desktop product the sole .app delivery); use the new
+          # name explicitly.
+          brew install --cask docker-desktop
+          # Pre-seed user prefs so the onboarding tutorial doesn't pop up
+          # (older `install accept-license` subcommand was removed in 4.x).
+          defaults write com.docker.docker SkipFirstRunTutorial -bool true || true
+          defaults write com.docker.docker AnalyticsEnabled -bool false || true
+          # Use the absolute path: `open -a Docker` fails before LaunchServices
+          # has reindexed a freshly installed app.
+          open --background /Applications/Docker.app
+          echo "Waiting for docker daemon..."
+          for i in $(seq 1 180); do
+            if docker info >/dev/null 2>&1; then
+              echo "docker ready after $((i * 2)) seconds"
+              break
+            fi
+            sleep 2
+          done
+          docker version
+          echo "=== docker info OperatingSystem ==="
+          docker info -f '{{.OperatingSystem}}'
 
       - name: Detect API key availability
         id: key
