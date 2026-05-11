@@ -88,11 +88,17 @@ jobs:
       - name: diag - smoke-test claude_code_base image
         run: |
           set -euxo pipefail
-          echo "=== docker info ==="; docker version || true
-          echo "=== image inspect ==="; docker image inspect claude_code_base:latest | head -50
+          # Match the launcher's engine preference (podman first on Linux,
+          # docker on macOS). Hardcoding docker breaks Ubuntu where podman
+          # is the default and the install.sh image lives in podman storage.
+          if command -v podman >/dev/null 2>&1; then ENGINE=podman; else ENGINE=docker; fi
+          echo "=== engine: $ENGINE ==="
+          $ENGINE version
+          echo "=== image inspect ==="
+          $ENGINE image inspect claude_code_base:latest | head -50
           echo "=== claude --version inside container ==="
-          docker run --rm -i \
-            --entrypoint /home/$USER/.local/bin/claude \
+          $ENGINE run --rm -i \
+            --entrypoint "/home/$USER/.local/bin/claude" \
             claude_code_base:latest --version
 
       # ============== STEP 2: run claude-yolo-automate =======================
