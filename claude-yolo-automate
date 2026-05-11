@@ -210,7 +210,12 @@ if [ -t 0 ]; then TTY_ARGS+=(-t); fi
     "${SANDBOX_VOLUME_ARGS[@]}" \
     -v "$HOME/.ssh":"/home/$USER/.ssh:ro" \
     -v "$HOME/.claude":"/home/$USER/.claude" \
-    -v "$HOME/.claude.json":"/home/$USER/.claude.json" \
+    `# claude.json is bind-mounted only on Linux. lima/virtiofs (the docker` \
+    `# stack on hosted macOS runners and Docker Desktop) returns size-0 reads` \
+    `# from this single-file mount once claude has it open for read+write,` \
+    `# causing claude -p to exit 0 with no output. Skipping the mount lets` \
+    `# claude use the container-local copy; ~/.claude/ still persists state.` \
+    $([ "$(uname -s)" = "Linux" ] && echo "-v $HOME/.claude.json:/home/$USER/.claude.json") \
     $([ -d "$HOME/Pictures/screenshot" ] && echo "-v $HOME/Pictures/screenshot:/home/$USER/Pictures/screenshot") \
     -e ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
